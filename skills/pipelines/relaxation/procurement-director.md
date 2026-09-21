@@ -2,115 +2,135 @@
 
 Produces: `work/ASSET_LIST.md`, and an `awaiting_human` checkpoint
 
-This is the **human gate**. The footage is licensed stock that a person must
-buy. Your job is to say exactly what to buy, then stop.
+This is the **human gate**. The footage is licensed stock a person must buy.
+Say exactly what to buy, then stop.
+
+## Read this first
+
+**`skills/meta/asset-procurement.md` defines the process** — deriving search
+intent, inspecting provider filters, building hard/preferred/unset profiles,
+two-pass screening, exact-item verification, cross-list diversity review, the
+`ASSET_LIST.md` format, and the honesty rules about what was actually
+inspected.
+
+Follow it. **This skill does not repeat it** — it only says what *good*
+procurement means for long-form relaxation.
+
+| Layer | Resource | Purpose |
+|---|---|---|
+| Meta | `meta/asset-procurement.md` | How to discover, evaluate and verify assets |
+| Artifact | `proposal_packet` | The approved concept — every requirement derives from it |
+| Channel | `<channel_root>/BRAND.md` | Subject priorities and what to avoid |
+| Protocol | `meta/checkpoint-protocol.md` | The `awaiting_human` gate |
 
 ## Why this stage exists
 
-The canonical `assets` stage produces an `asset_manifest`, and that artifact
-requires real local file paths. Before a human has downloaded anything there are
-no paths, so the request cannot live in `asset_manifest` — it has to happen
-before it. That is the whole justification for this being a stage of its own,
-and it is the only non-canonical stage in this pipeline. It deliberately
-produces **no new artifact schema**: the request list travels in the
-checkpoint's `metadata`, and the operator reads the Markdown view.
+The canonical `assets` stage produces an `asset_manifest`, which requires real
+local file paths. Before a human has downloaded anything there are no paths, so
+the request cannot live there. That is the whole justification for this being a
+stage of its own, and it is the only non-canonical stage in this pipeline. It
+produces **no new artifact schema** — the request travels in checkpoint
+metadata, with a Markdown view for the employee.
 
-## What you may and may not do
+---
 
-- You **may** browse and search Envato to find candidate items.
-- You **may not** automate authenticated or bulk downloads. Licensing and
-  downloading are the human's actions, deliberately.
+## What good procurement means for long-form relaxation
 
-## Derive the list from the approved concept
+Relaxation is unusual: the camera is mostly still, shots are held far longer
+than in any other format, and the viewer often has the video on for hours.
+That changes what counts as a good asset.
 
-Read `proposal_packet`. Work out what the edit actually needs: how many distinct
-visual setups, which environments, which shot scales and camera moves, roughly
-how many minutes of usable footage, what music, what ambience.
+**Prefer, where the concept calls for it:**
 
-Size it honestly. For relaxation content a reuse factor above ~0.5 (usable
-minutes ÷ target minutes) allows a varied edit; around 0.25 forces deliberate
-spaced re-use; below ~0.15 the target duration should come down instead. Ask
-for enough that the `assets` stage is not set up to fail.
+- **Long usable shots.** A held shot is the unit of this format. A clip whose
+  steady section is only a few seconds is nearly worthless here even if it is
+  beautiful, because it cannot carry a hold.
+- **Calm camera movement** — static, or a drift slow enough to be unnoticed.
+- **Stable, settled composition** that survives a long look.
+- **Environmental continuity** — light, season and weather that can sit next to
+  the neighbouring shots without jarring.
+- **Natural visual rhythm** — movement supplied by the subject (water, leaves,
+  mist), not by the camera.
+- **Wide / medium / detail variety** across the pool, so the edit has scales to
+  cut between.
+- **Ambience with genuine usable length** and a clean, un-processed character.
+- **Low visual distraction** — nothing that pulls the eye and breaks the spell.
 
-Be specific. "Misty river establishing wide, 4K, static or very slow push,
-dawn light, 20 s+ usable" is actionable. "Some river footage" is not.
+**Avoid, unless the concept explicitly wants it:**
 
-## On links — do not invent URLs
+- aggressive or fast camera movement; rapid handheld
+- commercial or lifestyle framing (models, products, staged activity)
+- speed ramps and timelapses
+- baked-in heavy grades or stylised edits
+- clips that already loop
+- prominent human activity
 
-Prefer exact Envato item-page URLs **when you have actually verified them**.
+## Duration is the constraint that bites
 
-If you cannot verify an item page, **give precise search instructions instead**:
-the site, the exact search terms, the filters, and what a good result looks
-like. Say which you are doing for each entry.
+The most common failure in this format is **buying far too little footage**.
 
-A fabricated link costs the employee ten minutes and costs you their trust in
-the whole list. An honest "search Envato Elements for X, filter 4K, pick a
-static wide" is more useful than a plausible URL that 404s.
-
-## `work/ASSET_LIST.md` — the operator view
-
-This is a convenience view, **not** a parallel state system. The checkpoint is
-the state. Write it in this shape:
+Work it out explicitly and write the arithmetic into the checkpoint:
 
 ```
-# ASSET LIST
-
-Project:      <channel_id> / <video_id>
-Channel:      <channel name>
-Video Concept: <one line>
-Target Duration: <duration>
-
-==================================================
-VISUALS
-==================================================
-
-Put these in:  <absolute path to the visuals folder>
-
-1. <verified Envato item URL, or precise search instructions>
-   Purpose: Misty river establishing shot, dawn
-   Download: 4K
-   Put in: <folder>
-
-2. ...
-
-==================================================
-MUSIC
-==================================================
-
-Put these in:  <absolute path>
-
-...
-
-==================================================
-SFX / AMBIENCE
-==================================================
-
-Put these in:  <absolute path>
-
-...
-
-==================================================
-WHEN FINISHED
-==================================================
-
-Reply to the AI agent:
-
-Assets added, continue.
+unique screen time needed  = approved duration
+usable seconds per clip    = realistic steady section AFTER trimming the
+                             unsteady head and tail — not the listed length
+clips needed               = screen time ÷ usable seconds, × a reject margin
 ```
 
-Use **absolute paths** for every destination so the employee never has to work
-out the layout.
+Two rules that follow:
 
-Also tell them to save licence receipts — anything without evidence gets flagged
-at the `assets` stage and cannot ship.
+- **Do not assume a clip's listed duration is usable duration.** Stock clips
+  routinely open or close with a bump, a focus hunt or an exposure shift.
+- **If the concept promises no repetition, the footage must actually support
+  it.** Either request enough for the full duration, or say plainly that the
+  duration should come down. **Never close the gap by repeating shots while
+  still claiming the video is unrepeated**, and never by stretching footage
+  with artificial slow motion.
 
-## Then stop
+Where the provider exposes a **length filter**, use it — raising the minimum
+clip length is the single most effective way to keep the clip count sane.
 
-Write the checkpoint with **`status: "awaiting_human"`**, `human_approval_required: true`,
-and the structured request list in `metadata` (per request: media type, purpose,
-preferred spec, URL or search instruction, destination folder).
+## Sound: an evolving bed, not one file on repeat
 
-Then **end the turn.** Tell the operator:
+The soundscape must change across the runtime. A single ambience file looping
+for an hour is audible and is the format's other classic failure.
+
+Derive from the approved concept: **each movement wants its own water or
+environment character**, plus secondary layers and occasional detail. Where
+several similar files are needed, say explicitly that they must be *genuinely
+different recordings*, not the same source repeated.
+
+State a ceiling — how much of the film any single ambience file may cover — and
+require beds to cross over **inside a shot, never on a cut**.
+
+## What comes from where
+
+Nothing in this skill fixes the subject, season, resolution, duration or shot
+mix. Those come from:
+
+- the **approved `proposal_packet`** — concept, duration, movements, canvas
+- the **channel's `BRAND.md`** — subjects to prioritise and avoid
+- the **current asset requirement** being filled
+- the **provider's actual filters** at runtime
+
+Another relaxation channel may want ocean, rain, fireplace or night scenery at
+a different length and canvas, through this same pipeline. If you find yourself
+writing a specific subject, season or resolution into *this file*, it belongs
+in that channel's `BRAND.md` instead.
+
+## The gate
+
+Write `work/ASSET_LIST.md` in the format `meta/asset-procurement.md` defines —
+exact item links, one per entry, absolute destination folders, no internal
+filter complexity, no creative decisions left to the employee.
+
+Also tell them to save licence receipts; anything without evidence gets flagged
+at `assets` and cannot ship.
+
+Then write the checkpoint with `status: "awaiting_human"`,
+`human_approval_required: true`, and the structured request list plus the
+footage and audio arithmetic in `metadata`. **End the turn:**
 
 ```
 WAITING FOR ASSETS
@@ -128,8 +148,8 @@ media.** An empty assets folder is a reason to wait, not to improvise.
 
 ## On resumption
 
-When the operator says assets are added: verify the files are actually there and
-sufficient for the concept. If they are clearly short, say precisely what is
-still missing and remain at `awaiting_human` — do not limp forward with too
-little footage. If sufficient, record the human approval on the checkpoint and
-continue into `assets`.
+Verify the files are actually present and sufficient for the concept. If they
+are clearly short, say precisely what is missing and remain at
+`awaiting_human` — do not limp forward with too little footage, and do not
+quietly shorten the film without saying so. If sufficient, record the human
+approval on the checkpoint and continue into `assets`.

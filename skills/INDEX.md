@@ -293,6 +293,8 @@ Cross-cutting skills that apply to all pipelines:
 | Animation Runtime Selector | `meta/animation-runtime-selector.md` | Choose render runtime + animation library per scene |
 | Taste Direction | `meta/taste-direction.md` | Convert a brief into taste dials, anti-patterns, and reference strategy for proposal/playbook/atelier work |
 | Bespoke Composition (Atelier) | `meta/bespoke-composition.md` | Hand-author a composition from scratch (hero work) — no stock scene-types; routes art-direction → motion principles → engine mechanics → atelier render |
+| Asset Procurement | `meta/asset-procurement.md` | How to discover, evaluate and verify stock assets from a provider and produce an exact-item procurement list for a human to license — provider-aware, format-agnostic |
+| VidQwik Pipeline Authoring | `meta/vidqwik-pipeline-authoring.md` | Architectural guardrail: decide where new behaviour belongs before creating a pipeline, skill or subsystem |
 
 ## Style Playbooks
 
