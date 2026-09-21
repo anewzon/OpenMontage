@@ -1,0 +1,231 @@
+name: longform-relaxation
+version: "1.0"
+description: >
+  Long-form (60-180 min) cinematic nature relaxation pipeline for LOCAL,
+  operator-supplied licensed footage, music and ambience. Inverts the
+  documentary-montage order: local media is inventoried and analysed FIRST,
+  and the creative plan is built from what the footage actually contains
+  rather than from search queries. Builds a multi-movement timeline with
+  varied shot durations and motivated transitions, an authored multi-layer
+  soundscape, restrained color normalisation across mixed sources, an
+  explicit anti-template review gate, and a chunked FFmpeg render with
+  stream-copy assembly so a failure at minute 110 does not restart the job.
+category: custom
+stability: beta
+default_checkpoint_policy: guided
+
+reference_input:
+  supported: false
+
+orchestration:
+  mode: executive-producer
+  skill: pipelines/longform-relaxation/executive-producer
+  budget_default_usd: 0.00
+  max_revisions_per_stage: 3
+  max_send_backs: 2
+  max_wall_time_minutes: 600
+
+extensions:
+  custom_scripts: true
+  custom_playbooks: true
+  custom_skills: true
+  custom_tools: false
+
+required_skills:
+  - pipelines/longform-relaxation/executive-producer
+  - pipelines/longform-relaxation/asset-director
+  - pipelines/longform-relaxation/creative-director
+  - pipelines/longform-relaxation/edit-director
+  - pipelines/longform-relaxation/review-director
+  - meta/reviewer
+  - meta/checkpoint-protocol
+
+compatible_playbooks:
+  custom_allowed: true
+
+stages:
+  # 1 - project validation + media inventory + visual/audio analysis
+  - name: inventory
+    skill: pipelines/longform-relaxation/asset-director
+    produces:
+      - asset_manifest
+    required_tools: []
+    optional_tools:
+      - video_analyzer
+      - audio_enhance
+    tools_available:
+      - video_analyzer
+      - audio_enhance
+    checkpoint_required: true
+    human_approval_default: false
+    review_focus:
+      - Every file under visuals/ music/ sfx/ overlays/ is probed and recorded
+      - Resolution, fps, duration, codec and pixel format recorded per clip
+      - Clips below the 3840x2160 delivery canvas are flagged, not silently upscaled
+      - Usable sub-ranges noted per clip (steady, well-exposed, watermark-free)
+      - Unusable material is rejected with a reason, not quietly dropped
+      - Licence evidence in licenses/ is cross-referenced against every asset
+    success_criteria:
+      - Schema-valid asset_manifest artifact
+      - Every asset has path, type, duration and provenance/licence note
+      - metadata.inventory_stats present with total usable visual minutes
+      - Total usable visual minutes reported against brief target duration
+
+  # 2 - original creative concept and movement structure
+  - name: idea
+    skill: pipelines/longform-relaxation/creative-director
+    required_artifacts_in:
+      - asset_manifest
+    produces:
+      - brief
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - Concept is specific to THIS footage, not a generic relaxation template
+      - Movement structure is invented for these assets, never a reused skeleton
+      - Movement count and durations sum to the target duration
+      - Music and ambience plan is present and evolves across movements
+      - No narration and no subtitles unless the operator explicitly asked
+    success_criteria:
+      - Schema-valid brief artifact
+      - metadata.movements[] present with name, intent and target minutes
+      - Sum of movement minutes within 5% of target duration
+
+  # 3 - movement-level scene plan bound to real local clips
+  - name: scene_plan
+    skill: pipelines/longform-relaxation/creative-director
+    required_artifacts_in:
+      - brief
+      - asset_manifest
+    produces:
+      - scene_plan
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - Every slot references a real asset id and a real usable sub-range
+      - Shot scale (wide / medium / detail) and motion type recorded per slot
+      - No asset is reused twice inside one movement
+      - Reuse across movements is deliberate and noted, not accidental
+      - Per-movement ambience and music intent is stated
+    success_criteria:
+      - Schema-valid scene_plan artifact
+      - Every slot resolves to an asset id present in asset_manifest
+      - Sum of slot target holds within 10% of brief duration
+
+  # 4 - multilayer timeline construction
+  - name: edit
+    skill: pipelines/longform-relaxation/edit-director
+    required_artifacts_in:
+      - scene_plan
+      - asset_manifest
+    produces:
+      - edit_decisions
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - render_runtime is ffmpeg for the body; remotion only for declared overlay segments
+      - Shot durations vary; no long run of near-identical holds
+      - Transition vocabulary is at most 4 values and every choice has a reason
+      - No two adjacent cuts share subject AND scale
+      - Audio layers are declared with per-layer volume, offset and fades
+      - J-cut / L-cut audio leads are expressed as audio offsets, not video trims
+      - Every cut carries a reason
+    success_criteria:
+      - Schema-valid edit_decisions artifact
+      - render_runtime set explicitly
+      - metadata.audio_layers[] present
+      - metadata.chunk_plan[] present for any timeline over 20 minutes
+      - Timeline duration within 5% of brief duration
+
+  # 5 - authored soundscape + restrained visual finishing
+  - name: finish
+    skill: pipelines/longform-relaxation/edit-director
+    required_artifacts_in:
+      - edit_decisions
+      - asset_manifest
+    produces:
+      - asset_manifest
+    required_tools:
+      - audio_mixer
+    optional_tools:
+      - color_grade
+      - audio_enhance
+      - video_trimmer
+    tools_available:
+      - audio_mixer
+      - color_grade
+      - audio_enhance
+      - video_trimmer
+    checkpoint_required: true
+    human_approval_default: false
+    review_focus:
+      - Mixed soundscape is normalised to 48 kHz stereo (MANDATORY - audio_mixer emits 192 kHz mono)
+      - Loudness target is -14 LUFS integrated for YouTube, true peak at or below -1.5 dBTP
+      - No abrupt music or ambience entries; every layer fades
+      - Grade is restrained; no aggressive LUT over high-quality source
+      - Grade is applied consistently across clips from different cameras
+    success_criteria:
+      - Mixed audio file exists and ffprobe reports 48000 Hz, 2 channels
+      - Measured integrated loudness within 1 LU of target
+      - Graded clip paths written back into asset_manifest
+
+  # 6 - anti-template / originality gate
+  - name: review
+    skill: pipelines/longform-relaxation/review-director
+    required_artifacts_in:
+      - edit_decisions
+      - scene_plan
+      - brief
+    produces:
+      - review
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - Shot-duration histogram shows genuine variation, not a repeating cycle
+      - Transition sequence shows no fixed repeating pattern
+      - Subject and shot-scale sequence does not cycle mechanically
+      - Soundscape evolves across movements rather than looping unchanged
+      - Multilayer technique is used where it helps, not everywhere
+      - The edit reads as directed, not as concatenated stock
+    success_criteria:
+      - Schema-valid review artifact
+      - Every anti-template check has an explicit pass or fail with evidence
+      - Any fail sends the run back to the edit stage before rendering
+
+  # 7 - chunked render + post-render QC
+  - name: compose
+    skill: pipelines/longform-relaxation/edit-director
+    required_artifacts_in:
+      - edit_decisions
+      - asset_manifest
+      - brief
+      - review
+    produces:
+      - render_report
+    required_tools:
+      - video_compose
+    optional_tools:
+      - video_stitch
+      - audio_mixer
+    tools_available:
+      - video_compose
+      - video_stitch
+      - audio_mixer
+    checkpoint_required: true
+    human_approval_default: false
+    review_focus:
+      - Pre-render validation passed before any long encode started
+      - Chunks rendered to plan; each chunk probed before assembly
+      - Final assembly used stream copy, not a second lossy re-encode
+      - Output is 3840x2160 / 30 fps / yuv420p / H.264 / AAC 48 kHz stereo
+      - Output duration matches the planned timeline within 2 seconds
+      - Completed chunks are preserved so a late failure resumes, never restarts
+    success_criteria:
+      - Schema-valid render_report artifact
+      - Output file exists in output/ and passes ffprobe validation
+      - render_report.chunks[] records every chunk with its size
+      - render_report.qc contains resolution, fps, duration, loudness and A/V sync checks
