@@ -82,6 +82,31 @@ These are measured facts about this OpenMontage install. Design within them.
    and produces substantially larger files for comparable quality. **Default to
    `libx264 -crf 18 -preset medium`** and treat NVENC as the fast-draft option.
 
+## `STATUS.md` is the project's memory
+
+Every production project carries a `STATUS.md`. **Read it before anything
+else**, in every session, and update it after every major stage.
+
+It exists because this workflow must survive the chat closing, the PC
+restarting, and a completely fresh agent picking the project up days later.
+Chat history is not state. The project folder is.
+
+Rules:
+
+- Mark a field `COMPLETE` only when the artifact **exists on disk** and passed
+  its check. A status file that overstates progress is worse than none, because
+  the next session will skip real work.
+- Set `Stage: WAITING_FOR_ASSETS` and **stop** once `work/ASSET_LIST.md` is
+  written. Never improvise around missing footage.
+- On failure set `Stage: ERROR` with `ERROR:`, `LAST SUCCESSFUL STAGE:` and
+  `NEXT ACTION:`, then resume from that last successful stage — not from the
+  start.
+- Keep `NEXT ACTION` accurate. It is the first thing a new session reads.
+
+The project's `RUN_PRODUCTION.md` defines the commands (`Create the next video
+for channel_XXXX`, `Assets added, continue.`, `Continue video_XXXX`) and the
+stage vocabulary. Follow it.
+
 ## Checkpoints
 
 Follow `skills/meta/checkpoint-protocol.md`. Stages with

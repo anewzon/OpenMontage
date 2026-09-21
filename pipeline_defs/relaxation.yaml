@@ -37,10 +37,12 @@ extensions:
 
 required_skills:
   - pipelines/relaxation/executive-producer
+  - pipelines/relaxation/research-director
   - pipelines/relaxation/asset-director
   - pipelines/relaxation/creative-director
   - pipelines/relaxation/edit-director
   - pipelines/relaxation/review-director
+  - pipelines/relaxation/packaging-director
   - meta/reviewer
   - meta/checkpoint-protocol
 
@@ -48,6 +50,26 @@ compatible_playbooks:
   custom_allowed: true
 
 stages:
+  # 0 - topic research and selection (skipped when the brief locks the topic)
+  - name: research
+    skill: pipelines/relaxation/research-director
+    produces: []
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - "Skipped entirely when brief.txt says TOPIC LOCKED: YES"
+      - The channel's COMPETITORS.md and RESEARCH.md were both read
+      - Findings cite what was actually observed, never invented numbers
+      - Views-per-hour used to compare videos of different ages
+      - Selected concept is ORIGINAL, not a competitor video reproduced
+      - Selected concept stays inside the channel's BRAND.md
+      - Unavailable sources are named as unavailable rather than guessed at
+    success_criteria:
+      - work/research.md written in the short documented format
+      - brief.txt PROJECT TITLE and VISUAL THEME filled in from the selection
+      - Selected topic is achievable with the assets the operator can obtain
+
   # 1 - project validation + media inventory + visual/audio analysis
   - name: inventory
     skill: pipelines/relaxation/asset-director
@@ -230,6 +252,31 @@ stages:
       - Completed chunks are preserved so a late failure resumes, never restarts
     success_criteria:
       - Schema-valid render_report artifact
-      - Output file exists in output/ and passes ffprobe validation
+      - output/final.mp4 exists and passes ffprobe validation
       - render_report.chunks[] records every chunk with its size
       - render_report.qc contains resolution, fps, duration, loudness and A/V sync checks
+
+  # 8 - packaging: thumbnail + publish.txt, AFTER final.mp4 exists
+  - name: package
+    skill: pipelines/relaxation/packaging-director
+    required_artifacts_in:
+      - render_report
+      - brief
+    produces: []
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - Runs only AFTER output/final.mp4 exists and passed QC
+      - Packaging reflects the video that was actually made, not the plan
+      - Title is accurate, non-clickbait, and not a competitor title reworded
+      - Title formula is not the same one used on the previous upload
+      - Description is ready to paste, with no keyword stuffing
+      - No competitor or internal research is mentioned in any published text
+      - Tags are a concise relevant set, not hundreds
+      - Thumbnail represents the real video; competitor thumbnails not cloned
+      - Exactly one final option is delivered, not a menu
+    success_criteria:
+      - output/thumbnail.jpg exists and is a valid readable JPEG
+      - output/publish.txt exists and follows the documented structure
+      - "output/ contains exactly three deliverables: final.mp4, thumbnail.jpg, publish.txt"

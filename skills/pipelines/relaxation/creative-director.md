@@ -82,6 +82,18 @@ Wait for the operator's approval before advancing.
 Schema-valid `brief` with `metadata.movements[]` (name, intent, target minutes,
 visual character, sonic character). Movement minutes must sum to within 5% of
 target, and a `render_runtime_selection` entry must exist in the decision log.
+
+Also write **`work/creative_plan.md`** — a concise human-readable companion to
+the artifact, covering: overall visual progression · the movements and roughly
+how long each runs · pacing · soundscape progression · where music enters,
+changes and leaves · transition philosophy · the visual treatments chosen · any
+short multilayer or composited sections.
+
+Keep it brief and useful — it is what a later session (or the operator) reads to
+understand the intent behind the timeline without decoding the JSON artifact.
+
+Update `STATUS.md`: `Creative Plan: COMPLETE`, `Stage: PRODUCTION`.
+
 Stop for operator approval.
 
 ---

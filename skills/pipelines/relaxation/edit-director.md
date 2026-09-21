@@ -197,7 +197,7 @@ All chunks share identical codec, resolution, fps, pixel format and audio
 parameters, so assemble with the concat demuxer and **stream copy**:
 
 ```
-ffmpeg -f concat -safe 0 -i work/chunks/list.txt -c copy output/FINAL.mp4
+ffmpeg -f concat -safe 0 -i work/chunks/list.txt -c copy output/final.mp4
 ```
 
 **Never re-encode at assembly.** A second lossy pass over the whole film for no
@@ -219,5 +219,10 @@ Probe the finished file and record in `render_report.qc`:
   frames, no missing grade
 
 Record every chunk with its size in `render_report.chunks[]`. Write the
-deliverable to `output/`. Report the path and the QC results to the operator —
-and do not upload anything.
+deliverable to **`output/final.mp4`** — that exact name; the operator and the
+`package` stage both depend on it. Keep chunks and intermediates in `work/`,
+never in `output/`.
+
+Report the path and the QC results, then hand over to the `package` stage,
+which produces `thumbnail.jpg` and `publish.txt` alongside it. **Do not upload
+anything.**

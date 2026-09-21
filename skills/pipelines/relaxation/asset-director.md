@@ -82,8 +82,27 @@ grading/framing; below 0.15 means the target duration should come down or more
 footage should come in. State which band you are in and recommend accordingly —
 do not just hand over a number.
 
+## Reject, don't force
+
+**Not every downloaded file belongs in the video.** The employee downloaded what
+`work/ASSET_LIST.md` asked for; some of it will still be wrong — off-brand,
+soft, watermarked, wrong mood, or simply weaker than its neighbours.
+
+Rejecting a clip with a stated reason is doing the job. Forcing every file in
+because someone paid for it is how a montage ends up incoherent. Say what you
+rejected and why, then re-check that the remaining footage budget still supports
+the target duration.
+
+For audio, assess where practical: duration, loudness, ambience type, mood, and
+whether it matches the visible environment — a gentle-creek bed under a
+waterfall is a mismatch, not a soundtrack.
+
 ## Output
 
 Write a schema-valid `asset_manifest` to `work/`. Every asset needs `id`, `type`,
 `path`, `duration` and a provenance/licence note. Put probe data, usable ranges,
 flags and `inventory_stats` (including the reuse factor) under `metadata`.
+
+Keep analysis files in `work/` — the operator never manages them.
+
+Update `STATUS.md`: `Asset Analysis: COMPLETE`, `Stage: PRODUCTION`.
