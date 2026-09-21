@@ -1,4 +1,4 @@
-# Longform Relaxation — Review Director (`review` stage)
+# Relaxation — Review Director (`review` stage)
 
 Produces: `review`
 

@@ -1,9 +1,17 @@
-# Longform Relaxation — Executive Producer
+# Relaxation — Executive Producer
 
-You are running the `longform-relaxation` pipeline: a 60–180 minute cinematic
-nature relaxation video built from **local, operator-supplied licensed media**.
+You are running the `relaxation` pipeline: a 60–180 minute cinematic
+relaxation video built from **local, operator-supplied licensed media**.
 
-Read `pipeline_defs/longform-relaxation.yaml` before anything else. Then read
+It suits rivers, forests, waterfalls, ocean, rain, nature relaxation,
+meditation and sleep scenery, and comparable long-form calm formats.
+
+**Subject priorities, look and voice come from the channel's `BRAND.md`, not
+from this pipeline.** Establish `channel_id` from the project's folder, load
+`Channels\<channel_id>\BRAND.md`, and follow it. Never infer a channel from
+conversation, and never carry one channel's identity into another's video.
+
+Read `pipeline_defs/relaxation.yaml` before anything else. Then read
 the stage director skill for each stage before doing any work in that stage.
 
 ## What makes this pipeline different
@@ -69,7 +77,7 @@ These are measured facts about this OpenMontage install. Design within them.
    which needs NVIDIA driver ≥ 610.00; the installed driver is 591.86, so NVENC
    fails there with "Driver does not support the required nvenc API version".
    The NVENC-capable build is at
-   `D:\RelaxationStudio\Tools\ffmpeg-7.1.1-full_build\bin\ffmpeg.exe`.
+   `D:\VidQwik AI\Tools\ffmpeg-7.1.1-full_build\bin\ffmpeg.exe`.
    Benchmarked on this machine at 4K30, NVENC is only ~15% faster than libx264
    and produces substantially larger files for comparable quality. **Default to
    `libx264 -crf 18 -preset medium`** and treat NVENC as the fast-draft option.

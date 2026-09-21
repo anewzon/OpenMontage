@@ -1,4 +1,4 @@
-# Longform Relaxation — Asset Director (`inventory` stage)
+# Relaxation — Asset Director (`inventory` stage)
 
 Produces: `asset_manifest`
 

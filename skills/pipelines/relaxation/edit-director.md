@@ -1,4 +1,4 @@
-# Longform Relaxation — Edit Director (`edit`, `finish`, `compose` stages)
+# Relaxation — Edit Director (`edit`, `finish`, `compose` stages)
 
 Produces: `edit_decisions` (edit), updated `asset_manifest` (finish),
 `render_report` (compose)
@@ -143,6 +143,26 @@ Write graded paths back into `asset_manifest`.
 
 ## Stage: `compose` → `render_report`
 
+### Route by the runtime that was locked at `idea`
+
+Read `edit_decisions.render_runtime` and route on it. **Never let the tool
+choose** — `video_compose` will otherwise fall back to its legacy behaviour and
+silently pick Remotion.
+
+- **`ffmpeg`** — the expected value here, and the only runtime that renders a
+  60–180 minute 4K body in a sane time. Everything below assumes it.
+- **`remotion`** — permitted only for a short declared overlay or end-card
+  segment, rendered separately and concatenated. Never for the full body.
+- **`hyperframes`** — not used by this pipeline. It is an HTML/CSS/GSAP motion
+  graphics runtime with no end-tag or long-form concat parity here, and it
+  offers nothing a silent nature montage needs. If `edit_decisions` somehow
+  arrives with `render_runtime: "hyperframes"`, **stop and surface that to the
+  operator** rather than substituting a runtime yourself.
+
+If the locked runtime is unavailable or fails, that is a blocker to escalate —
+swapping runtimes without the operator's approval is a governance violation.
+Re-log any approved change as a new `render_runtime_selection` entry.
+
 ### Before the long encode
 
 Confirm `review` passed. Render **one chunk first**, probe it, and look at it.
@@ -161,7 +181,7 @@ Default, on this machine:
 
 Benchmarked here at ~2.4× realtime at 4K30, so a 120-minute render is roughly
 50 minutes. NVENC is available only through
-`D:\RelaxationStudio\Tools\ffmpeg-7.1.1-full_build\bin\ffmpeg.exe` (the system
+`D:\VidQwik AI\Tools\ffmpeg-7.1.1-full_build\bin\ffmpeg.exe` (the system
 FFmpeg 9.0.1 needs a newer NVIDIA driver) and measured only ~15% faster with
 larger files — use it for drafts, not for the deliverable. If you switch, tell
 the operator and log the decision.

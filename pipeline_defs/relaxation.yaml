@@ -1,8 +1,12 @@
-name: longform-relaxation
+name: relaxation
 version: "1.0"
 description: >
-  Long-form (60-180 min) cinematic nature relaxation pipeline for LOCAL,
-  operator-supplied licensed footage, music and ambience. Inverts the
+  Long-form (60-180 min) cinematic relaxation pipeline for LOCAL,
+  operator-supplied licensed footage, music and ambience. Suits rivers,
+  forests, waterfalls, ocean, rain, nature relaxation, meditation and sleep
+  scenery, and comparable long-form calm formats. Channel-specific identity
+  (subject priorities, look, voice) lives in that channel's BRAND.md, never
+  in this pipeline. Inverts the
   documentary-montage order: local media is inventoried and analysed FIRST,
   and the creative plan is built from what the footage actually contains
   rather than from search queries. Builds a multi-movement timeline with
@@ -19,7 +23,7 @@ reference_input:
 
 orchestration:
   mode: executive-producer
-  skill: pipelines/longform-relaxation/executive-producer
+  skill: pipelines/relaxation/executive-producer
   budget_default_usd: 0.00
   max_revisions_per_stage: 3
   max_send_backs: 2
@@ -32,11 +36,11 @@ extensions:
   custom_tools: false
 
 required_skills:
-  - pipelines/longform-relaxation/executive-producer
-  - pipelines/longform-relaxation/asset-director
-  - pipelines/longform-relaxation/creative-director
-  - pipelines/longform-relaxation/edit-director
-  - pipelines/longform-relaxation/review-director
+  - pipelines/relaxation/executive-producer
+  - pipelines/relaxation/asset-director
+  - pipelines/relaxation/creative-director
+  - pipelines/relaxation/edit-director
+  - pipelines/relaxation/review-director
   - meta/reviewer
   - meta/checkpoint-protocol
 
@@ -46,7 +50,7 @@ compatible_playbooks:
 stages:
   # 1 - project validation + media inventory + visual/audio analysis
   - name: inventory
-    skill: pipelines/longform-relaxation/asset-director
+    skill: pipelines/relaxation/asset-director
     produces:
       - asset_manifest
     required_tools: []
@@ -73,7 +77,7 @@ stages:
 
   # 2 - original creative concept and movement structure
   - name: idea
-    skill: pipelines/longform-relaxation/creative-director
+    skill: pipelines/relaxation/creative-director
     required_artifacts_in:
       - asset_manifest
     produces:
@@ -94,7 +98,7 @@ stages:
 
   # 3 - movement-level scene plan bound to real local clips
   - name: scene_plan
-    skill: pipelines/longform-relaxation/creative-director
+    skill: pipelines/relaxation/creative-director
     required_artifacts_in:
       - brief
       - asset_manifest
@@ -116,7 +120,7 @@ stages:
 
   # 4 - multilayer timeline construction
   - name: edit
-    skill: pipelines/longform-relaxation/edit-director
+    skill: pipelines/relaxation/edit-director
     required_artifacts_in:
       - scene_plan
       - asset_manifest
@@ -142,7 +146,7 @@ stages:
 
   # 5 - authored soundscape + restrained visual finishing
   - name: finish
-    skill: pipelines/longform-relaxation/edit-director
+    skill: pipelines/relaxation/edit-director
     required_artifacts_in:
       - edit_decisions
       - asset_manifest
@@ -174,7 +178,7 @@ stages:
 
   # 6 - anti-template / originality gate
   - name: review
-    skill: pipelines/longform-relaxation/review-director
+    skill: pipelines/relaxation/review-director
     required_artifacts_in:
       - edit_decisions
       - scene_plan
@@ -198,7 +202,7 @@ stages:
 
   # 7 - chunked render + post-render QC
   - name: compose
-    skill: pipelines/longform-relaxation/edit-director
+    skill: pipelines/relaxation/edit-director
     required_artifacts_in:
       - edit_decisions
       - asset_manifest

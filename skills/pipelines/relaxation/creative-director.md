@@ -1,4 +1,4 @@
-# Longform Relaxation — Creative Director (`idea` and `scene_plan` stages)
+# Relaxation — Creative Director (`idea` and `scene_plan` stages)
 
 Produces: `brief` (idea stage), then `scene_plan` (scene_plan stage)
 
@@ -50,11 +50,39 @@ and how they cross over. A music change should land inside a shot, not on a cut.
 No narration. No subtitles. No visible chapter titles. Only override if
 `brief.txt` explicitly says so.
 
+### Settle the render runtime here, with the operator
+
+The `idea` stage is where `render_runtime` is decided and logged. Do not leave
+it to the compose stage and do not let the tool default — a silent default to
+Remotion is a governance violation under `AGENT_GUIDE.md`.
+
+Present the real options for **this** brief and recommend one:
+
+- **`ffmpeg`** — trims, normalises and concatenates. The recommended choice for
+  long-form here: a 120-minute 4K timeline is ~216,000 frames, and this is the
+  only runtime that renders it in a sane time. It cannot composite, so
+  dissolves come from `video_stitch` and layered audio from `audio_mixer`.
+- **`remotion`** — frame-accurate React rendering, true layering and titles.
+  Correct for a short overlay or end-card segment; **not viable for a full
+  60–180 minute body**.
+- **`hyperframes`** — HTML/CSS/GSAP motion graphics. Built for kinetic
+  typography and promos; it offers nothing a silent nature montage needs, so
+  expect to reject it — but say so rather than ignoring it.
+
+Check what is actually installed via `video_compose.get_info()["render_engines"]`
+before presenting, and record the choice in `decision_log` as a
+`render_runtime_selection` entry listing **all** runtimes considered, with
+`rejected_because` on each one not chosen. A decision log naming only one
+runtime when others were available is a critical reviewer finding.
+
+Wait for the operator's approval before advancing.
+
 ### Output
 
 Schema-valid `brief` with `metadata.movements[]` (name, intent, target minutes,
 visual character, sonic character). Movement minutes must sum to within 5% of
-target. Stop for operator approval.
+target, and a `render_runtime_selection` entry must exist in the decision log.
+Stop for operator approval.
 
 ---
 
