@@ -1,25 +1,24 @@
 name: relaxation
-version: "1.0"
+version: "2.0"
 description: >
   Long-form (60-180 min) cinematic relaxation pipeline for LOCAL,
   operator-supplied licensed footage, music and ambience. Suits rivers,
   forests, waterfalls, ocean, rain, nature relaxation, meditation and sleep
   scenery, and comparable long-form calm formats. Channel-specific identity
   (subject priorities, look, voice) lives in that channel's BRAND.md, never
-  in this pipeline. Inverts the
-  documentary-montage order: local media is inventoried and analysed FIRST,
-  and the creative plan is built from what the footage actually contains
-  rather than from search queries. Builds a multi-movement timeline with
-  varied shot durations and motivated transitions, an authored multi-layer
-  soundscape, restrained color normalisation across mixed sources, an
-  explicit anti-template review gate, and a chunked FFmpeg render with
-  stream-copy assembly so a failure at minute 110 does not restart the job.
+  in this pipeline. Research is web-grounded like the explainer pipeline;
+  procurement is a human gate because the footage is licensed stock that a
+  person must buy. Everything after that inverts the documentary-montage
+  order: local media is analysed FIRST and the edit is cast from what the
+  footage actually contains rather than from search queries. Renders through
+  FFmpeg with chunked, stream-copy assembly so a failure at minute 110 does
+  not restart the job.
 category: custom
 stability: beta
 default_checkpoint_policy: guided
 
 reference_input:
-  supported: false
+  supported: true
 
 orchestration:
   mode: executive-producer
@@ -38,11 +37,12 @@ extensions:
 required_skills:
   - pipelines/relaxation/executive-producer
   - pipelines/relaxation/research-director
+  - pipelines/relaxation/proposal-director
+  - pipelines/relaxation/procurement-director
   - pipelines/relaxation/asset-director
-  - pipelines/relaxation/creative-director
+  - pipelines/relaxation/scene-director
   - pipelines/relaxation/edit-director
-  - pipelines/relaxation/review-director
-  - pipelines/relaxation/packaging-director
+  - pipelines/relaxation/publish-director
   - meta/reviewer
   - meta/checkpoint-protocol
 
@@ -50,29 +50,80 @@ compatible_playbooks:
   custom_allowed: true
 
 stages:
-  # 0 - topic research and selection (skipped when the brief locks the topic)
+  # 1 - web-grounded topic research against the channel's own competitor list
   - name: research
     skill: pipelines/relaxation/research-director
+    produces:
+      - research_brief
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: false
+    review_focus:
+      - The channel's COMPETITORS.md and RESEARCH.md were both read at runtime
+      - Landscape covers the listed competitors plus the wider niche
+      - Findings cite real observed sources, never invented numbers
+      - Views-per-hour used when comparing videos of different ages
+      - Unavailable signals are reported as unavailable, not estimated
+      - At least 3 genuinely different angles discovered
+      - Angles are original concepts, not competitor videos restated
+    success_criteria:
+      - Schema-valid research_brief artifact
+      - data_points carry sources
+      - angles_discovered has at least 3 entries grounded in findings
+      - Skipped only when the operator locked the topic, and said so explicitly
+
+  # 2 - concept selection; render runtime and duration locked here
+  - name: proposal
+    skill: pipelines/relaxation/proposal-director
+    required_artifacts_in:
+      - research_brief
+    produces:
+      - proposal_packet
+    tools_available:
+      - video_compose
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - Concept is original and specific, not a competitor video reproduced
+      - Concept sits inside the channel's BRAND.md
+      - Movement structure is invented for this concept, not a reused skeleton
+      - Duration, visual progression, pacing and soundscape direction are concrete
+      - Packaging hypothesis present but explicitly provisional
+      - render_runtime presented with both alternatives and logged as a decision
+      - Cost estimate is 0.00 - local assets, local FFmpeg, no paid providers
+    success_criteria:
+      - Schema-valid proposal_packet artifact
+      - production_plan.render_runtime set explicitly
+      - decision_log contains a render_runtime_selection entry naming all options
+      - Operator approved the selected concept
+
+  # 3 - HUMAN GATE: the footage is licensed stock a person must buy
+  - name: procurement
+    skill: pipelines/relaxation/procurement-director
+    required_artifacts_in:
+      - proposal_packet
     produces: []
     tools_available: []
     checkpoint_required: true
     human_approval_default: true
     review_focus:
-      - "Skipped entirely when brief.txt says TOPIC LOCKED: YES"
-      - The channel's COMPETITORS.md and RESEARCH.md were both read
-      - Findings cite what was actually observed, never invented numbers
-      - Views-per-hour used to compare videos of different ages
-      - Selected concept is ORIGINAL, not a competitor video reproduced
-      - Selected concept stays inside the channel's BRAND.md
-      - Unavailable sources are named as unavailable rather than guessed at
+      - Requests derive from the approved concept, not a generic shopping list
+      - Every request states media type, purpose, preferred spec and destination
+      - Item URLs are verified, or precise search instructions given instead
+      - No fabricated Envato URLs
+      - Quantity is enough for the target duration at a sane reuse factor
+      - ASSET_LIST.md written for the employee in the documented shape
+      - Checkpoint written with status awaiting_human, then the turn ENDS
     success_criteria:
-      - work/research.md written in the short documented format
-      - brief.txt PROJECT TITLE and VISUAL THEME filled in from the selection
-      - Selected topic is achievable with the assets the operator can obtain
+      - work/ASSET_LIST.md exists and is human-readable
+      - Checkpoint status is awaiting_human with the request list in metadata
+      - No assets were auto-downloaded
 
-  # 1 - project validation + media inventory + visual/audio analysis
-  - name: inventory
+  # 4 - analyse what the human actually downloaded
+  - name: assets
     skill: pipelines/relaxation/asset-director
+    required_artifacts_in:
+      - proposal_packet
     produces:
       - asset_manifest
     required_tools: []
@@ -85,44 +136,23 @@ stages:
     checkpoint_required: true
     human_approval_default: false
     review_focus:
-      - Every file under visuals/ music/ sfx/ overlays/ is probed and recorded
-      - Resolution, fps, duration, codec and pixel format recorded per clip
-      - Clips below the 3840x2160 delivery canvas are flagged, not silently upscaled
-      - Usable sub-ranges noted per clip (steady, well-exposed, watermark-free)
-      - Unusable material is rejected with a reason, not quietly dropped
-      - Licence evidence in licenses/ is cross-referenced against every asset
+      - Runs only after the human confirmed assets were added
+      - Every supplied file probed; native analysis tools used, not ad-hoc scripts
+      - Usable sub-ranges identified per clip, not whole-file assumptions
+      - Clips below the delivery canvas flagged, never silently upscaled
+      - Unsuitable assets rejected with a reason rather than forced in
+      - Licence evidence cross-referenced; unverified assets flagged
+      - Reuse factor reported against the approved duration
     success_criteria:
       - Schema-valid asset_manifest artifact
-      - Every asset has path, type, duration and provenance/licence note
-      - metadata.inventory_stats present with total usable visual minutes
-      - Total usable visual minutes reported against brief target duration
+      - Every asset has path, type, duration and a provenance note
+      - metadata.inventory_stats present including the reuse factor
 
-  # 2 - original creative concept and movement structure
-  - name: idea
-    skill: pipelines/relaxation/creative-director
-    required_artifacts_in:
-      - asset_manifest
-    produces:
-      - brief
-    tools_available: []
-    checkpoint_required: true
-    human_approval_default: true
-    review_focus:
-      - Concept is specific to THIS footage, not a generic relaxation template
-      - Movement structure is invented for these assets, never a reused skeleton
-      - Movement count and durations sum to the target duration
-      - Music and ambience plan is present and evolves across movements
-      - No narration and no subtitles unless the operator explicitly asked
-    success_criteria:
-      - Schema-valid brief artifact
-      - metadata.movements[] present with name, intent and target minutes
-      - Sum of movement minutes within 5% of target duration
-
-  # 3 - movement-level scene plan bound to real local clips
+  # 5 - cast the concept onto the real footage
   - name: scene_plan
-    skill: pipelines/relaxation/creative-director
+    skill: pipelines/relaxation/scene-director
     required_artifacts_in:
-      - brief
+      - proposal_packet
       - asset_manifest
     produces:
       - scene_plan
@@ -131,16 +161,17 @@ stages:
     human_approval_default: true
     review_focus:
       - Every slot references a real asset id and a real usable sub-range
-      - Shot scale (wide / medium / detail) and motion type recorded per slot
-      - No asset is reused twice inside one movement
-      - Reuse across movements is deliberate and noted, not accidental
-      - Per-movement ambience and music intent is stated
+      - Shot scale and motion type recorded per slot
+      - No asset reused twice inside one movement
+      - Cross-movement reuse is deliberate, spaced and justified
+      - Per-movement ambience and music intent stated
+      - Slot holds vary genuinely; no mechanical rotation
     success_criteria:
       - Schema-valid scene_plan artifact
       - Every slot resolves to an asset id present in asset_manifest
-      - Sum of slot target holds within 10% of brief duration
+      - Sum of slot holds within 10% of the approved duration
 
-  # 4 - multilayer timeline construction
+  # 6 - timeline, sound design and grade
   - name: edit
     skill: pipelines/relaxation/edit-director
     required_artifacts_in:
@@ -148,88 +179,46 @@ stages:
       - asset_manifest
     produces:
       - edit_decisions
-    tools_available: []
+    required_tools:
+      - audio_mixer
+    optional_tools:
+      - color_grade
+      - video_stitch
+      - audio_enhance
+      - video_trimmer
+    tools_available:
+      - audio_mixer
+      - color_grade
+      - video_stitch
+      - audio_enhance
+      - video_trimmer
     checkpoint_required: true
     human_approval_default: true
     review_focus:
-      - render_runtime is ffmpeg for the body; remotion only for declared overlay segments
-      - Shot durations vary; no long run of near-identical holds
-      - Transition vocabulary is at most 4 values and every choice has a reason
+      - render_runtime carried unchanged from the approved proposal
+      - Shot durations vary; no run of near-identical holds
+      - Transition vocabulary at most 4 values, each choice motivated
       - No two adjacent cuts share subject AND scale
-      - Audio layers are declared with per-layer volume, offset and fades
-      - J-cut / L-cut audio leads are expressed as audio offsets, not video trims
-      - Every cut carries a reason
+      - Audio layers declared with per-layer volume, offset and fades
+      - J-cuts and L-cuts expressed as audio offsets, never video trims
+      - Mixed soundscape normalised to 48 kHz stereo, loudness two-pass verified
+      - Grade is restrained normalisation, not styling
+      - metadata.chunk_plan present for any timeline over 20 minutes
+      - Every cut carries a reason that describes a decision
     success_criteria:
       - Schema-valid edit_decisions artifact
       - render_runtime set explicitly
-      - metadata.audio_layers[] present
-      - metadata.chunk_plan[] present for any timeline over 20 minutes
-      - Timeline duration within 5% of brief duration
-
-  # 5 - authored soundscape + restrained visual finishing
-  - name: finish
-    skill: pipelines/relaxation/edit-director
-    required_artifacts_in:
-      - edit_decisions
-      - asset_manifest
-    produces:
-      - asset_manifest
-    required_tools:
-      - audio_mixer
-    optional_tools:
-      - color_grade
-      - audio_enhance
-      - video_trimmer
-    tools_available:
-      - audio_mixer
-      - color_grade
-      - audio_enhance
-      - video_trimmer
-    checkpoint_required: true
-    human_approval_default: false
-    review_focus:
-      - Mixed soundscape is normalised to 48 kHz stereo (MANDATORY - audio_mixer emits 192 kHz mono)
-      - Loudness target is -14 LUFS integrated for YouTube, true peak at or below -1.5 dBTP
-      - No abrupt music or ambience entries; every layer fades
-      - Grade is restrained; no aggressive LUT over high-quality source
-      - Grade is applied consistently across clips from different cameras
-    success_criteria:
-      - Mixed audio file exists and ffprobe reports 48000 Hz, 2 channels
+      - Mixed audio file reports 48000 Hz and 2 channels via ffprobe
       - Measured integrated loudness within 1 LU of target
-      - Graded clip paths written back into asset_manifest
+      - Timeline duration within 5% of the approved duration
 
-  # 6 - anti-template / originality gate
-  - name: review
-    skill: pipelines/relaxation/review-director
-    required_artifacts_in:
-      - edit_decisions
-      - scene_plan
-      - brief
-    produces:
-      - review
-    tools_available: []
-    checkpoint_required: true
-    human_approval_default: true
-    review_focus:
-      - Shot-duration histogram shows genuine variation, not a repeating cycle
-      - Transition sequence shows no fixed repeating pattern
-      - Subject and shot-scale sequence does not cycle mechanically
-      - Soundscape evolves across movements rather than looping unchanged
-      - Multilayer technique is used where it helps, not everywhere
-      - The edit reads as directed, not as concatenated stock
-    success_criteria:
-      - Schema-valid review artifact
-      - Every anti-template check has an explicit pass or fail with evidence
-      - Any fail sends the run back to the edit stage before rendering
-
-  # 7 - chunked render + post-render QC
+  # 7 - chunked render + technical and editorial QC
   - name: compose
-    skill: pipelines/relaxation/edit-director
+    skill: pipelines/relaxation/compose-director
     required_artifacts_in:
       - edit_decisions
       - asset_manifest
-      - brief
-      - review
+      - proposal_packet
     produces:
       - render_report
     required_tools:
@@ -244,39 +233,44 @@ stages:
     checkpoint_required: true
     human_approval_default: false
     review_focus:
-      - Pre-render validation passed before any long encode started
-      - Chunks rendered to plan; each chunk probed before assembly
+      - Routed by the locked render_runtime; no silent runtime swap
+      - One chunk rendered and inspected before the long encode
       - Final assembly used stream copy, not a second lossy re-encode
-      - Output is 3840x2160 / 30 fps / yuv420p / H.264 / AAC 48 kHz stereo
-      - Output duration matches the planned timeline within 2 seconds
-      - Completed chunks are preserved so a late failure resumes, never restarts
+      - Output is 3840x2160 (or the approved canvas) / 30 fps / yuv420p / H.264
+      - Audio is AAC 48 kHz stereo at the approved loudness and true peak
+      - Duration matches the planned timeline within 2 seconds
+      - Editorial pass - no mechanical repetition, no stock-playlist feeling
+      - Completed chunks preserved so a late failure resumes, never restarts
     success_criteria:
       - Schema-valid render_report artifact
       - output/final.mp4 exists and passes ffprobe validation
-      - render_report.chunks[] records every chunk with its size
-      - render_report.qc contains resolution, fps, duration, loudness and A/V sync checks
+      - render_report.qc records resolution, fps, pix_fmt, audio, loudness, sync
+      - Editorial findings recorded; any fail sends the run back to edit
 
-  # 8 - packaging: thumbnail + publish.txt, AFTER final.mp4 exists
-  - name: package
-    skill: pipelines/relaxation/packaging-director
+  # 8 - export the ready-to-publish package (no upload)
+  - name: publish
+    skill: pipelines/relaxation/publish-director
     required_artifacts_in:
       - render_report
-      - brief
-    produces: []
+      - proposal_packet
+    produces:
+      - publish_log
     tools_available: []
     checkpoint_required: true
     human_approval_default: true
     review_focus:
-      - Runs only AFTER output/final.mp4 exists and passed QC
-      - Packaging reflects the video that was actually made, not the plan
-      - Title is accurate, non-clickbait, and not a competitor title reworded
-      - Title formula is not the same one used on the previous upload
-      - Description is ready to paste, with no keyword stuffing
-      - No competitor or internal research is mentioned in any published text
-      - Tags are a concise relevant set, not hundreds
-      - Thumbnail represents the real video; competitor thumbnails not cloned
-      - Exactly one final option is delivered, not a menu
+      - Runs only after final.mp4 exists and passed QC
+      - Packaging describes the video actually made, not the plan
+      - Title accurate, non-clickbait, not a competitor title reworded
+      - Title formula differs from the channel's previous upload
+      - Description ready to paste, no keyword stuffing
+      - No competitor names or internal research in any published text
+      - Tags a concise relevant set, not hundreds
+      - Thumbnail a real frame from the video where possible; never a competitor clone
+      - Exactly one final option delivered, not a menu
+      - Nothing uploaded - export only
     success_criteria:
-      - output/thumbnail.jpg exists and is a valid readable JPEG
-      - output/publish.txt exists and follows the documented structure
-      - "output/ contains exactly three deliverables: final.mp4, thumbnail.jpg, publish.txt"
+      - Schema-valid publish_log artifact recorded internally
+      - "output/ holds exactly three operator files: final.mp4, thumbnail.jpg, publish.txt"
+      - thumbnail.jpg is a valid readable JPEG
+      - publish.txt follows the documented structure with no unreplaced placeholders

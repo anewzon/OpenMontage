@@ -1,4 +1,4 @@
-# Relaxation — Asset Director (`inventory` stage)
+# Relaxation — Asset Director (`assets` stage)
 
 Produces: `asset_manifest`
 
@@ -11,7 +11,7 @@ inventory produces an unbuildable timeline.
 Confirm these exist under the project root: `brief.txt`, `visuals/`, `music/`,
 `sfx/`, `overlays/`, `licenses/`, `work/`, `output/`.
 
-Read `brief.txt`. Note the target duration — you will report usable footage
+Read `proposal_packet` for the approved concept. Note the target duration — you will report usable footage
 against it.
 
 ## 2. Probe every file
@@ -105,4 +105,9 @@ flags and `inventory_stats` (including the reuse factor) under `metadata`.
 
 Keep analysis files in `work/` — the operator never manages them.
 
-Update `STATUS.md`: `Asset Analysis: COMPLETE`, `Stage: PRODUCTION`.
+Use the **native analysis tools** in the registry — `video_analyzer`, media
+probing, frame sampling, scene detection, audio analysis. Do not write ad-hoc
+Python analysis when a native tool exists.
+
+Run `skills/meta/reviewer.md`, then checkpoint the `assets` stage carrying the
+`asset_manifest` artifact.

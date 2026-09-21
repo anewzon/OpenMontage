@@ -1,122 +1,100 @@
 # Relaxation — Executive Producer
 
-You are running the `relaxation` pipeline: a 60–180 minute cinematic
-relaxation video built from **local, operator-supplied licensed media**.
+You are running the `relaxation` pipeline: a 60–180 minute cinematic relaxation
+video built from **local, operator-supplied licensed media**.
 
-It suits rivers, forests, waterfalls, ocean, rain, nature relaxation,
-meditation and sleep scenery, and comparable long-form calm formats.
+It suits rivers, forests, waterfalls, ocean, rain, nature relaxation, meditation
+and sleep scenery, and comparable long-form calm formats.
 
-**Subject priorities, look and voice come from the channel's `BRAND.md`, not
-from this pipeline.** Establish `channel_id` from the project's folder, load
-`Channels\<channel_id>\BRAND.md`, and follow it. Never infer a channel from
-conversation, and never carry one channel's identity into another's video.
+Read `pipeline_defs/relaxation.yaml` first, then each stage's director skill
+**before** doing any work in that stage.
 
-Read `pipeline_defs/relaxation.yaml` before anything else. Then read
-the stage director skill for each stage before doing any work in that stage.
+## Stages
 
-## What makes this pipeline different
+`research → proposal → procurement → assets → scene_plan → edit → compose → publish`
 
-Every other footage pipeline in OpenMontage *searches* for clips. This one does
-not. The operator has already downloaded licensed footage, music and ambience
-into the project folder. Your job is to make the best possible film **out of
-exactly what is there**.
+Seven are the canonical OpenMontage stages with their canonical artifacts.
+`procurement` is the single addition: the footage is licensed stock a human must
+buy, and `asset_manifest` cannot represent a request for files that do not exist
+yet. It produces no new artifact schema — the request travels in checkpoint
+metadata, with a Markdown view for the employee.
 
-That inverts the usual order. `inventory` runs **first** — before `idea` — so
-that the creative concept is grounded in what the footage actually contains
-rather than in something you imagined and then tried to cast.
+## Channel context is loaded at runtime
 
-Stage order: `inventory → idea → scene_plan → edit → finish → review → compose`
+**This pipeline hard-codes no channel, no brand and no competitor.** Resolve the
+channel from the project, then read its `BRAND.md`, `COMPETITORS.md` and
+`RESEARCH.md`. Subject priorities, look and voice come from there; production
+behaviour comes from here. Never carry one channel's identity into another's
+video, and never infer a channel from conversation.
+
+## State lives in checkpoints, not in chat
+
+Use the native mechanism exactly as `skills/meta/checkpoint-protocol.md`
+documents it:
+
+- `init_project()` once, at the start
+- `get_next_stage()` to find where to resume — **this is the authority**
+- `write_checkpoint()` per stage with `in_progress`, `awaiting_human`,
+  `completed` or `failed`
+- artifacts validated against their canonical schemas
+
+A fresh session resumes from `get_next_stage()` and the existing checkpoints,
+never from conversational memory. Long stages save partial progress through
+checkpoint metadata; completed render chunks in `work/chunks/` are resumable and
+must not be deleted to "start clean" without asking.
+
+If a project also carries a `STATUS.md`, it is a **human-readable mirror only**.
+If it ever disagrees with a checkpoint, **the checkpoint wins** — correct the
+mirror, never the other way round.
 
 ## Hard constraints
 
-- **No paid providers.** Budget is 0.00 USD. Do not call any generative video,
+- **No paid providers.** Budget 0.00 USD. Do not call any generative video,
   image, music or TTS provider. If material is missing, say what is missing and
   stop — do not generate a substitute.
-- **No narration, no subtitles**, unless `brief.txt` explicitly asks for them.
-- **Local assets only.** Never fetch from Pexels, Pixabay, Archive.org or any
-  other source. If the operator wants more footage they add files and re-run.
-- **Never publish.** Produce the file in `output/`. Uploading is the operator's
-  decision, made outside this system.
+- **Local assets only.** Never fetch stock from Pexels, Pixabay or Archive.org.
+  Web access is for *research* and for finding Envato item pages, not for
+  acquiring media.
+- **Never auto-download Envato assets.** Licensing and downloading are human
+  actions.
+- **No narration, no subtitles**, unless the brief explicitly asks.
+- **Never publish.** Produce the package in `output/`. Uploading is the
+  operator's decision, made outside this system.
+
+## Verified platform constraints
+
+Measured on this installation — design within them, and re-check each run in
+case the toolchain has changed.
+
+1. **The `ffmpeg` runtime is concat-only.** No `xfade`, `overlay` or `amix`.
+   Dissolves come from `video_stitch`, layered audio from `audio_mixer`.
+   **True V2/V3 video overlay is unavailable** on this path — state the
+   limitation rather than implying layering that is not there. Do not build a
+   compositor.
+2. **`video_stitch` crossfade outputs `yuv444p`** — its `xfade` paths do not pin
+   the pixel format. ffprobe every stitch output.
+3. **`audio_mixer` emits 192 kHz.** Normalise to 48 kHz stereo before composing.
+4. **Single-pass `loudnorm` misses target** (−14 requested → −12.0). Always
+   finish with an explicit two-pass loudnorm.
+5. **NVENC needs FFmpeg 7.1.1 here** (`D:\VidQwik AI\Tools\...`); the system
+   FFmpeg 9.0.1 requires a newer NVIDIA driver. It is only ~15% faster with far
+   larger files — **default to `libx264 -crf 18 -preset medium`**.
 
 ## Renderer
 
-`render_runtime` is **`ffmpeg`** for the body of the video. This is a deliberate
-and binding choice, not a default: a 120-minute 4K timeline is ~216,000 frames,
-and Remotion renders frame-by-frame through a browser. That path is correct for
-motion graphics and wrong for a two-hour montage.
+`render_runtime` is chosen **in conversation at the `proposal` stage** and
+carried unchanged through `edit_decisions` — see `AGENT_GUIDE.md`. Present both
+available runtimes with honest tradeoffs, recommend one, log a
+`render_runtime_selection` decision naming every option, and wait for approval.
+Silent defaults and mid-run swaps are governance violations.
 
-Remotion is permitted **only** for short declared overlay segments (an opening
-title card, a closing card) which are rendered separately and concatenated. If
-you use it, log it as a `render_runtime_selection` decision naming both options,
-per the governance rule in `AGENT_GUIDE.md`.
-
-Announce the runtime choice to the operator before the compose stage. Do not
-silently swap runtimes mid-run.
-
-## Known platform constraints (verified on this installation)
-
-These are measured facts about this OpenMontage install. Design within them.
-
-1. **The `ffmpeg` runtime is concat-only.** `video_compose._compose` trims each
-   cut, normalises it, concatenates, and muxes one external audio track. It does
-   **not** do `xfade`, `overlay` or `amix`. So:
-   - Dissolves come from **`video_stitch`** (`transition: crossfade | fade`),
-     applied to the clip groups that need them — not from `video_compose`.
-   - Layered audio comes from **`audio_mixer`** (`operation: mix`), pre-mixed
-     into a single track that is then passed as `audio_path`.
-   - **True V2/V3 video overlay is not available on this path.** Do not promise
-     it. Achieve visual layering through grading, shot selection and pacing, or
-     render a short overlay segment via Remotion and concatenate it.
-
-2. **`audio_mixer` emits 192 kHz mono.** `loudnorm` leaves the internal rate on
-   the output. You MUST normalise the mix to 48 kHz stereo before compose:
-   `ffmpeg -i mixed.wav -ar 48000 -ac 2 -c:a pcm_s16le mixed48.wav`
-   Skipping this ships a file YouTube will re-encode badly.
-
-3. **NVENC requires FFmpeg 7.1.1 on this machine.** The system FFmpeg is 9.0.1,
-   which needs NVIDIA driver ≥ 610.00; the installed driver is 591.86, so NVENC
-   fails there with "Driver does not support the required nvenc API version".
-   The NVENC-capable build is at
-   `D:\VidQwik AI\Tools\ffmpeg-7.1.1-full_build\bin\ffmpeg.exe`.
-   Benchmarked on this machine at 4K30, NVENC is only ~15% faster than libx264
-   and produces substantially larger files for comparable quality. **Default to
-   `libx264 -crf 18 -preset medium`** and treat NVENC as the fast-draft option.
-
-## `STATUS.md` is the project's memory
-
-Every production project carries a `STATUS.md`. **Read it before anything
-else**, in every session, and update it after every major stage.
-
-It exists because this workflow must survive the chat closing, the PC
-restarting, and a completely fresh agent picking the project up days later.
-Chat history is not state. The project folder is.
-
-Rules:
-
-- Mark a field `COMPLETE` only when the artifact **exists on disk** and passed
-  its check. A status file that overstates progress is worse than none, because
-  the next session will skip real work.
-- Set `Stage: WAITING_FOR_ASSETS` and **stop** once `work/ASSET_LIST.md` is
-  written. Never improvise around missing footage.
-- On failure set `Stage: ERROR` with `ERROR:`, `LAST SUCCESSFUL STAGE:` and
-  `NEXT ACTION:`, then resume from that last successful stage — not from the
-  start.
-- Keep `NEXT ACTION` accurate. It is the first thing a new session reads.
-
-The project's `RUN_PRODUCTION.md` defines the commands (`Create the next video
-for channel_XXXX`, `Assets added, continue.`, `Continue video_XXXX`) and the
-stage vocabulary. Follow it.
+For a full-length body the answer is `ffmpeg`. Remotion is for short declared
+overlay segments only.
 
 ## Checkpoints
 
 Follow `skills/meta/checkpoint-protocol.md`. Stages with
-`human_approval_default: true` (`idea`, `scene_plan`, `edit`, `review`) stop and
-wait for the operator. Do not run a multi-hour render without approved
-`edit_decisions` and a passing `review`.
-
-## Resume
-
-Future sessions must reconstruct state from `work/` artifacts on disk, never
-from conversation memory. Call `checkpoint.get_next_stage()` to find where to
-resume. Completed render chunks in `work/chunks/` are resumable — never delete
-them to "start clean" without asking the operator first.
+`human_approval_default: true` — `proposal`, `procurement`, `scene_plan`,
+`edit`, `publish` — stop and wait for the operator. At `procurement`, write
+`awaiting_human` and **end the turn**. Never start a multi-hour render without
+an approved timeline and a passing QC path.
