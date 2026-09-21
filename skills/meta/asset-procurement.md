@@ -169,6 +169,26 @@ procurement-level requirement to satisfy.
 
 Below 4 on any row, fix it before the gate.
 
+### Step 10b: When the agent can acquire directly
+
+Some providers expose an API the pipeline already has a tool for. Where a
+**permitted free source** can be fetched by a native tool, the agent may
+acquire directly instead of producing a human download list — the calling
+Director decides which applies.
+
+The evaluation discipline does not relax; it moves. Instead of judging item
+pages, you judge **the files that actually arrived**: probe every one, screen it
+on real content, and reject on the same criteria. A search result is a claim;
+the file is the evidence.
+
+Still mandatory: use only the native tools (never a scraper, never an access
+workaround), pass an explicit output path inside the project workspace, record
+provider/URL/creator/licence per asset, and keep the human gate — the operator
+approves the acquired pool before production continues.
+
+"Free" describes the licence, not the absence of obligations, and it says
+nothing about any platform's monetisation decisions. Do not imply otherwise.
+
 ### Step 11: Submit — the human gate
 
 Write the employee-facing list (below), then write the checkpoint with

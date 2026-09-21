@@ -107,17 +107,20 @@ stages:
     checkpoint_required: true
     human_approval_default: true
     review_focus:
+      - Sourcing mode read from proposal_packet.production_plan.sourcing, not assumed
       - Requests derive from the approved concept, not a generic shopping list
       - Every request states media type, purpose, preferred spec and destination
-      - Item URLs are verified, or precise search instructions given instead
-      - No fabricated Envato URLs
+      - "licensed_manual: item URLs verified, or precise search instructions instead; no fabricated URLs"
+      - "free_auto: acquired via native stock tools only - no scraper, no access workaround"
+      - "free_auto: every asset carries provider, source URL, creator and licence"
+      - "free_auto: downloaded files inspected on real content, not on search metadata"
       - Quantity is enough for the target duration at a sane reuse factor
-      - ASSET_LIST.md written for the employee in the documented shape
+      - Human gate preserved in BOTH modes
       - Checkpoint written with status awaiting_human, then the turn ENDS
     success_criteria:
-      - work/ASSET_LIST.md exists and is human-readable
-      - Checkpoint status is awaiting_human with the request list in metadata
-      - No assets were auto-downloaded
+      - Checkpoint status is awaiting_human with the request or acquired pool in metadata
+      - "licensed_manual: work/ASSET_LIST.md exists and is human-readable; nothing auto-downloaded"
+      - "free_auto: assets present in the project workspace with provenance recorded"
 
   # 4 - analyse what the human actually downloaded
   - name: assets

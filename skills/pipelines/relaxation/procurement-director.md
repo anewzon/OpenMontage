@@ -23,6 +23,49 @@ procurement means for long-form relaxation.
 | Channel | `<channel_root>/BRAND.md` | Subject priorities and what to avoid |
 | Protocol | `meta/checkpoint-protocol.md` | The `awaiting_human` gate |
 
+## Sourcing modes
+
+This stage supports **two** sourcing approaches. The mode comes from the
+approved `proposal_packet` (`production_plan.sourcing`), never from a
+hard-coded channel rule — the same pipeline serves both.
+
+| Mode | What it means |
+|---|---|
+| `licensed_manual` | Paid/licensed stock a human must buy (e.g. Envato). Produce an exact-item `ASSET_LIST.md`, checkpoint `awaiting_human`, and stop for the employee to license and download. |
+| `free_auto` | Permitted free stock acquired through OpenMontage's own tools (`pexels_video`, `pixabay_video`, `direct_clip_search`, `pixabay_music`). The agent downloads into the project workspace; the human gate becomes **approving the acquired pool**, not fetching files. |
+
+**In `free_auto`, never produce an Envato download list.** Asking the employee
+to fetch files the agent can legitimately acquire itself is wasted work.
+
+**In either mode the human gate remains.** `free_auto` still checkpoints
+`awaiting_human` with the acquired pool summarised for approval before
+production continues — the operator sees what was obtained and can reject it.
+
+### `free_auto` obligations
+
+Acquisition is the easy half; these are the parts that matter.
+
+- **Use the native tools.** Never write a scraper or a downloader, and never
+  work around a provider's access restrictions. If a provider blocks access or
+  its tool is broken, report the specific missing capability and stop — do not
+  substitute an unverified route.
+- **Always pass an explicit `output_path`/`output_dir`** under the project
+  workspace. Tools that default elsewhere will write to the repo root and
+  violate the workspace contract.
+- **Record provenance per asset**: provider, item/page URL, creator, and the
+  licence as the provider states it. Free does not mean unattributed or
+  unrestricted, and provenance is what makes a later licence question
+  answerable.
+- **Inspect what actually downloaded.** A search result is a claim; the file is
+  the evidence. Probe every file and screen it on its real content — the same
+  two-pass discipline as `meta/asset-procurement.md`, applied to bytes on disk
+  rather than to item pages.
+- **Work in bounded units** and save recoverable progress via `in_progress`
+  checkpoints and `metadata.partial_progress`, so a long acquisition run can
+  resume. Chat memory is not state.
+- **Do not claim free stock guarantees monetisation.** Licences permit use;
+  they say nothing about a platform's monetisation decisions.
+
 ## Why this stage exists
 
 The canonical `assets` stage produces an `asset_manifest`, which requires real

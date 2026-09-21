@@ -16,6 +16,11 @@ import { ProductReveal, ProductRevealProps } from "./components/ProductReveal";
 import { CaptionOverlay, WordCaption } from "./components/CaptionOverlay";
 import { CollageBurst, CollageBurstProps } from "./CollageBurst";
 import { LyricOverlay, LyricOverlayProps } from "./LyricOverlay";
+import {
+  RiverFlowOpening,
+  RiverFlowOpeningProps,
+  calculateRiverFlowOpeningMetadata,
+} from "./RiverFlowOpening";
 
 // ---------------------------------------------------------------------------
 // Theme System — prevents every video from looking like dark fintech
@@ -190,6 +195,24 @@ export const Root: React.FC = () => {
           fontSize: 52,
           highlightColor: "#22D3EE",
         }}
+      />
+      <Composition
+        id="RiverFlowOpening"
+        component={RiverFlowOpening}
+        // Channel opening: restrained wordmark over episode footage.
+        // Metadata (size + duration) is derived from the supplied bed clip.
+        durationInFrames={30 * 8}
+        fps={30}
+        width={1920}
+        height={1080}
+        defaultProps={{
+          videoSrc: "",
+          wordmark: "River Flow Naturescapes",
+          episodeLine: undefined,
+          durationSeconds: 8,
+          scrimOpacity: 0.38,
+        } as RiverFlowOpeningProps}
+        calculateMetadata={calculateRiverFlowOpeningMetadata}
       />
       <Composition
         id="TitledVideo"
