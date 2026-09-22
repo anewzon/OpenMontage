@@ -464,3 +464,42 @@ def test_request_exception_on_submit_is_an_unknown_charge(priced, tool, tmp_path
     assert result.data["charge_status"] == "unknown"
     assert result.cost_usd == 0.06
     assert len(fake.posts) == 1
+
+
+# ---- max-duration calibration (2026-09-23) ----------------------------------
+
+
+def test_v6_duration_range_is_the_documented_one():
+    prop = SunoMusic.input_schema["properties"]["duration_seconds"]
+    assert (prop["minimum"], prop["maximum"]) == (10, 360)
+    assert suno_module.DURATION_RANGE_SECONDS == (10, 360)
+
+
+def test_a_360_second_v6_request_is_valid(tool, tmp_path):
+    payload = tool._build_payload(_instrumental(tmp_path, duration_seconds=360))
+    assert payload["duration"] == 360.0 and payload["model"] == "V6"
+    assert "blocker" not in tool.dry_run(_instrumental(tmp_path, duration_seconds=360))
+
+
+def test_v6_price_is_verified_fixed_at_both_ends_of_the_range(tool):
+    assert suno_module.VERIFIED_CREDITS_PER_GENERATION["V6"] == 12.0
+    assert suno_module.PRICE_VERIFIED_AT_SECONDS["V6"] == (10.0, 360.0)
+    assert tool.estimate_cost({"prompt": "x", "duration_seconds": 10}) == 0.06
+    assert tool.estimate_cost({"prompt": "x", "duration_seconds": 360}) == 0.06
+    assert tool.pricing_status("V6")["verified_at_requested_seconds"] == [10.0, 360.0]
+
+
+def test_mismatch_guard_still_fires_on_a_max_duration_call(priced, tool, tmp_path):
+    fake = FakeSuno(tracks=[_track(0, 359.84), _track(1, 359.88)], credits=(988, 970))
+    result = _run(tool, _instrumental(tmp_path, duration_seconds=360), fake)
+    assert result.data["pricing_mismatch"]["measured_credits"] == 18
+    blocked = FakeSuno()
+    assert _run(tool, _instrumental(tmp_path, duration_seconds=360), blocked).success is False
+    assert blocked.posts == []
+
+
+def test_a_matching_max_duration_charge_passes(priced, tool, tmp_path):
+    fake = FakeSuno(tracks=[_track(0, 359.84), _track(1, 359.88)], credits=(988, 976))
+    result = _run(tool, _instrumental(tmp_path, duration_seconds=360), fake)
+    assert result.data["pricing_check"]["status"] == "match"
+    assert [c["duration_seconds"] for c in result.data["candidates"]] == [359.84, 359.88]

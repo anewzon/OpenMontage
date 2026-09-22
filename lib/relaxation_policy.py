@@ -39,6 +39,10 @@ import yaml
 
 __all__ = [
     "BudgetNotApproved",
+    "account_music_candidates",
+    "generate_music_programme",
+    "generation_duration_strategy",
+    "next_music_request",
     "DurationOutOfRange",
     "PaidCostUnavailable",
     "approved_budget_tracker",
@@ -188,7 +192,10 @@ def plan_paid_audio(
         tool                        registry name of the music provider
         tool_inputs                 inputs priced per generation (model, ...)
         unique_music_seconds        accepted unique programme to generate
-        seconds_per_generation      requested length of each candidate
+        seconds_per_generation      optional requested length of each call;
+                                    derived when omitted (see below)
+        generation_duration_reason  required when a shorter-than-efficient
+                                    length is chosen on fixed pricing
         candidates_per_generation   candidates one paid request returns
         accepted_per_generation     candidates expected to pass selection
         retry_allowance             extra requests, as a fraction
@@ -201,8 +208,14 @@ def plan_paid_audio(
         retry_allowance             extra generations, as a fraction
 
     Music is planned as a PROGRAMME, not minute-for-minute: unique seconds are
-    the input, and the runtime beyond them is reprised in the edit. Generated
-    SFX is planned in SOURCE seconds; long beds are built from loopable sources.
+    the input, and the runtime beyond them is reprised in the edit. When
+    ``seconds_per_generation`` is omitted it is derived from the tool's own
+    contract (`generation_duration_strategy`): on fixed per-generation pricing
+    the longest permitted request is chosen, because it minimises paid calls.
+    The requested length only sizes the estimate - after generation, only the
+    MEASURED length of accepted candidates counts (`account_music_candidates`).
+    Generated SFX is planned in SOURCE seconds; long beds are built from
+    loopable sources.
 
     Returns ``cost_estimate`` (schema-valid for ``proposal_packet``) and
     ``metadata`` (the arithmetic, for ``proposal_packet.metadata.paid_audio_plan``).
@@ -219,13 +232,15 @@ def plan_paid_audio(
             raise ValueError(
                 "unique_music_seconds must be > 0 and no longer than the production"
             )
-        per_gen = float(music["seconds_per_generation"])
+        base_inputs = dict(music.get("tool_inputs") or {})
+        strategy = _duration_choice(tool, base_inputs, music)
+        per_gen = strategy["selected_seconds"]
         candidates = int(music["candidates_per_generation"])
         accepted = float(music["accepted_per_generation"])
         if per_gen <= 0 or candidates < 1 or not 0 < accepted <= candidates:
             raise ValueError("music generation parameters are inconsistent")
         allowance = _require_fraction(music.get("retry_allowance"), "music.retry_allowance")
-        inputs = {**dict(music.get("tool_inputs") or {}), "duration_seconds": per_gen}
+        inputs = {**base_inputs, "duration_seconds": per_gen}
         unit = _unit_cost(tool, inputs)
         base = math.ceil(unique / (per_gen * accepted))
         retry = math.ceil(base * allowance)
@@ -248,6 +263,7 @@ def plan_paid_audio(
             "unique_music_seconds": unique,
             "reprised_seconds": round(float(target_duration_seconds) - unique, 3),
             "seconds_per_generation": per_gen,
+            "generation_strategy": strategy,
             "candidates_per_generation": candidates,
             "accepted_per_generation": accepted,
             "base_requests": base,
@@ -345,6 +361,22 @@ def budget_summary(plan: Mapping[str, Any], approved_budget_usd: Optional[float]
     sfx = meta.get("sfx")
     lines = [f"Target duration: {meta['target_duration_seconds'] / 60:.1f} min"]
     if music:
+        strategy = music.get("generation_strategy") or {}
+        if strategy.get("pricing_basis") == "fixed_per_generation":
+            basis = f"fixed ${music['usd_per_request']:.2f} per generation"
+        elif strategy.get("pricing_basis") == "varies_with_duration":
+            basis = (f"varies with requested duration (${strategy['cost_at_min_usd']:.2f}"
+                     f" at {strategy['range_seconds'][0]:g} s, "
+                     f"${strategy['cost_at_max_usd']:.2f} at {strategy['range_seconds'][1]:g} s)")
+        else:
+            basis = f"${music['usd_per_request']:.2f} per generation"
+        lines += [
+            "Music generation strategy: "
+            f"{music['provider']} {music['model']} - {music['seconds_per_generation']:g} s "
+            "requested per paid call",
+            f"Pricing basis: {basis}",
+            f"Reason: {strategy.get('reason', 'stated by the caller')}",
+        ]
         lines += [
             f"Music provider: {music['provider']} via {music['tool']} ({music['model']})",
             f"Music programme target: {music['unique_music_seconds'] / 60:.1f} min unique "
@@ -424,3 +456,241 @@ def approved_budget_tracker(proposal_packet: Mapping[str, Any], project_dir: Pat
         tracker.approve_tool(name)
     tracker._save()
     return tracker
+
+
+# --------------------------------------------------------------------------
+# Generated music: cost-efficient request length, and honest accounting
+# --------------------------------------------------------------------------
+#
+# Generic over the tool contract: the duration range comes from the tool's own
+# `input_schema`, the model check from its `dry_run`, and the price from its
+# `estimate_cost`. No provider or model is named here.
+
+_EFFICIENT_REASON = "maximum verified duration costs the same as minimum verified duration"
+
+
+def generation_duration_strategy(tool: Any, tool_inputs: Mapping[str, Any]) -> dict[str, Any]:
+    """How request length affects cost for this tool and these inputs.
+
+    Reads ``input_schema.properties.duration_seconds.{minimum,maximum}``,
+    confirms the selected model accepts both ends (the tool's own
+    ``dry_run``), and prices both ends with ``estimate_cost``. When the two
+    prices are equal, the maximum is the cost-efficient request length.
+    Raises ValueError when the tool or model offers no explicit duration.
+    """
+    prop = ((getattr(tool, "input_schema", None) or {}).get("properties") or {}).get(
+        "duration_seconds") or {}
+    low, high = prop.get("minimum"), prop.get("maximum")
+    if low is None or high is None:
+        raise ValueError(f"{tool.name} declares no bounded duration_seconds")
+    at_low = {**dict(tool_inputs), "duration_seconds": float(low)}
+    at_high = {**dict(tool_inputs), "duration_seconds": float(high)}
+    cost_low, cost_high = _unit_cost(tool, at_low), _unit_cost(tool, at_high)
+    for probe in (at_low, at_high):
+        blocker = (tool.dry_run(dict(probe)) or {}).get("blocker")
+        if blocker:
+            raise ValueError(
+                f"{tool.name} cannot request {probe['duration_seconds']:g} s with these "
+                f"inputs: {blocker}"
+            )
+    fixed = abs(cost_high - cost_low) < 1e-9
+    return {
+        "range_seconds": [float(low), float(high)],
+        "cost_at_min_usd": cost_low,
+        "cost_at_max_usd": cost_high,
+        "pricing_basis": "fixed_per_generation" if fixed else "varies_with_duration",
+        "cost_efficient_seconds": float(high) if fixed else None,
+    }
+
+
+def _duration_choice(tool: Any, base_inputs: Mapping[str, Any],
+                     music: Mapping[str, Any]) -> dict[str, Any]:
+    explicit = music.get("seconds_per_generation")
+    reason = (music.get("generation_duration_reason") or "").strip()
+    try:
+        strategy = generation_duration_strategy(tool, base_inputs)
+    except ValueError as exc:
+        if explicit is None:
+            raise ValueError(
+                f"{exc}; state music.seconds_per_generation explicitly"
+            ) from exc
+        return {"selected_seconds": float(explicit), "source": "caller",
+                "pricing_basis": "unknown", "reason": reason or str(exc)}
+
+    note = ("requested length is a generation target; only the measured length "
+            "of accepted candidates counts toward the programme")
+    if explicit is None:
+        if strategy["pricing_basis"] != "fixed_per_generation":
+            raise ValueError(
+                f"{tool.name} cost rises with requested duration "
+                f"(${strategy['cost_at_min_usd']:.4f} -> ${strategy['cost_at_max_usd']:.4f}); "
+                "the longest request is not automatically cheapest - state "
+                "music.seconds_per_generation and generation_duration_reason"
+            )
+        return {**strategy, "selected_seconds": strategy["cost_efficient_seconds"],
+                "source": "derived_from_tool_contract", "reason": _EFFICIENT_REASON,
+                "note": note}
+
+    selected = float(explicit)
+    low, high = strategy["range_seconds"]
+    if not low <= selected <= high:
+        raise ValueError(f"seconds_per_generation must be within [{low:g}, {high:g}]")
+    efficient = strategy["cost_efficient_seconds"]
+    if efficient is not None and selected < efficient and not reason:
+        raise ValueError(
+            f"{selected:g} s is shorter than the cost-efficient {efficient:g} s at the "
+            "same price per call; record a concrete creative or provider reason in "
+            "music.generation_duration_reason"
+        )
+    return {**strategy, "selected_seconds": selected, "source": "caller",
+            "reason": reason or ("cost-efficient maximum" if selected == efficient
+                                 else "caller choice on duration-dependent pricing"),
+            "note": note}
+
+
+def account_music_candidates(
+    candidates: list[Mapping[str, Any]],
+    decisions: Mapping[int, Mapping[str, Any]],
+    probe: Optional[Any] = None,
+) -> dict[str, Any]:
+    """Accepted seconds contributed by ONE paid generation's candidates.
+
+    ``decisions`` maps each candidate ``index`` to ``{"accepted": bool,
+    "reason": str}`` - every candidate needs one; nothing is accepted by
+    default. An accepted candidate counts at its MEASURED length (ffprobe),
+    never the requested or provider-reported length; a rejected or missing
+    one counts zero. An accepted candidate that cannot be measured raises.
+    """
+    if probe is None:
+        from tools.analysis.audio_probe import probe_duration as probe
+    rows: list[dict[str, Any]] = []
+    total = 0.0
+    for cand in candidates:
+        index = cand.get("index")
+        if index not in decisions:
+            raise ValueError(f"candidate {index} has no accept/reject decision")
+        decision = decisions[index]
+        accepted = bool(decision.get("accepted")) and bool(cand.get("downloaded"))
+        measured = probe(cand["path"]) if cand.get("path") else None
+        if accepted and not measured:
+            raise ValueError(f"accepted candidate {index} could not be measured")
+        seconds = float(measured) if accepted else 0.0
+        total += seconds
+        rows.append({
+            "index": index,
+            "path": cand.get("path"),
+            "provider_reported_seconds": cand.get("duration_seconds"),
+            "measured_seconds": measured,
+            "accepted": accepted,
+            "accepted_seconds": seconds,
+            "reason": decision.get("reason") or "",
+        })
+    return {"accepted_seconds": round(total, 3), "candidates": rows}
+
+
+def next_music_request(
+    *,
+    target_seconds: float,
+    accepted_seconds: float,
+    tracker: Any,
+    tool: Any,
+    inputs: Mapping[str, Any],
+    requests_made: int,
+    max_requests: int,
+) -> dict[str, Any]:
+    """Whether ONE more paid generation is justified, from actual progress.
+
+    The planned request count and retry allowance are a ceiling, never a
+    quota: once accepted music meets the target, the answer is no.
+    """
+    remaining = max(0.0, float(target_seconds) - float(accepted_seconds))
+    state = {
+        "target_seconds": float(target_seconds),
+        "accepted_seconds": float(accepted_seconds),
+        "remaining_seconds": round(remaining, 3),
+        "requests_made": requests_made,
+        "max_requests": max_requests,
+        "spent_usd": round(tracker.budget_spent_usd, 4),
+        "usable_budget_usd": round(tracker.usable_budget_usd, 4),
+    }
+    if remaining <= 0:
+        return {**state, "generate": False, "reason": "target_met"}
+    if requests_made >= max_requests:
+        return {**state, "generate": False, "reason": "request_ceiling_reached"}
+    cost = _unit_cost(tool, inputs)
+    state["next_call_usd"] = cost
+    if cost > tracker.usable_budget_usd:
+        return {**state, "generate": False, "reason": "budget_would_be_exceeded"}
+    return {**state, "generate": True, "reason": "more_accepted_music_needed"}
+
+
+def generate_music_programme(
+    *,
+    tracker: Any,
+    tool: Any,
+    inputs: Mapping[str, Any],
+    target_seconds: float,
+    evaluate: Any,
+    max_requests: int,
+    accepted_seconds: float = 0.0,
+    requests_made: int = 0,
+    probe: Optional[Any] = None,
+) -> dict[str, Any]:
+    """Generate until the accepted unique-music target is met - and no further.
+
+    Every call goes through ``tracker.run_tool`` (estimate, reserve, execute,
+    reconcile). ``evaluate(candidates) -> {index: {"accepted", "reason"}}`` is
+    the caller's screening of every candidate. Stops on: target met, request
+    ceiling, budget, a refused reservation, a pricing mismatch, or a provider
+    failure - it never retries a failure on its own. ``accepted_seconds`` and
+    ``requests_made`` resume a programme started in an earlier session.
+    """
+    from tools.cost_tracker import ApprovalRequiredError, BudgetExceededError
+
+    base = Path(inputs["output_path"])
+    generations: list[dict[str, Any]] = []
+    stop: dict[str, Any] = {}
+    while True:
+        decision = next_music_request(
+            target_seconds=target_seconds, accepted_seconds=accepted_seconds,
+            tracker=tracker, tool=tool, inputs=inputs,
+            requests_made=requests_made, max_requests=max_requests,
+        )
+        if not decision["generate"]:
+            stop = decision
+            break
+        n = requests_made + 1
+        call_inputs = {**dict(inputs),
+                       "output_path": str(base.with_name(f"{base.stem}_g{n:02d}{base.suffix}"))}
+        try:
+            result = tracker.run_tool(tool, call_inputs, operation=f"music generation {n}")
+        except (BudgetExceededError, ApprovalRequiredError) as exc:
+            stop = {**decision, "generate": False, "reason": "reservation_refused",
+                    "detail": str(exc)}
+            break
+        requests_made = n
+        record: dict[str, Any] = {"request": n, "success": result.success,
+                                  "cost_usd": result.cost_usd,
+                                  "task_id": (result.data or {}).get("task_id")}
+        if result.success:
+            cands = (result.data or {}).get("candidates") or []
+            accounted = account_music_candidates(cands, evaluate(cands), probe=probe)
+            accepted_seconds += accounted["accepted_seconds"]
+            record.update(accounted)
+        generations.append(record)
+        if (result.data or {}).get("pricing_mismatch"):
+            stop = {"generate": False, "reason": "pricing_mismatch",
+                    "detail": result.data["pricing_mismatch"]}
+            break
+        if not result.success:
+            stop = {"generate": False, "reason": "provider_failure", "detail": result.error}
+            break
+    return {
+        "target_seconds": float(target_seconds),
+        "accepted_seconds": round(accepted_seconds, 3),
+        "remaining_seconds": round(max(0.0, float(target_seconds) - accepted_seconds), 3),
+        "requests_made": requests_made,
+        "spent_usd": round(tracker.budget_spent_usd, 4),
+        "stop": stop,
+        "generations": generations,
+    }

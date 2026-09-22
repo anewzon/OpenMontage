@@ -25,7 +25,9 @@ Contract verified against the live provider documentation on 2026-09-23:
 
 Pricing: sunoapi.org publishes the value of a credit (``$0.005``) but not how
 many credits a generation consumes. That figure is therefore **measured**: V6
-was calibrated with one live generation (see `VERIFIED_CREDITS_PER_GENERATION`).
+was calibrated with live generations at both ends of its duration range and
+costs the same 12 credits for each (see `VERIFIED_CREDITS_PER_GENERATION`), so
+`estimate_cost` is fixed per generation across the whole range.
 Only calibrated models are priced - nothing is inferred from a sibling model -
 so ``V6_WILD``, ``V6_MINI`` and the deprecated models stay unpriced, and
 ``execute`` refuses to submit an unpriced call, until each is verified.
@@ -35,9 +37,9 @@ before and after the call. When the measured charge differs from the known
 rate, the result carries ``pricing_mismatch`` and further paid generations of
 that model are refused until the operator resolves it.
 
-The calibration also showed that V6 treats ``duration`` as a target, not a
-limit: 10 s requested returned candidates of 33.5 s and 17.8 s. Plan on the
-measured candidate lengths, never the requested one.
+The calibrations also showed that V6 treats ``duration`` as a target: 10 s
+requested returned 33.5 s and 17.8 s, while 360 s returned 359.9 s twice.
+Count only the measured length of an accepted candidate, never the request.
 """
 
 from __future__ import annotations
@@ -76,9 +78,15 @@ USD_PER_CREDIT = 0.005
 #: Credits one generation request consumes, measured live. Only models listed
 #: here are priced; a sibling model is never assumed to cost the same.
 #:
-#: V6 - one live generation, 2026-09-22T20:28Z (task db79ee16630b...):
-#: balance 1000 -> 988 credits, 10 s requested, 2 candidates returned.
+#: V6 - two live generations, one at each end of the duration range:
+#:   2026-09-22T20:28Z  10 s requested   1000 -> 988 credits (task db79ee16...)
+#:                      candidates 33.5 s and 17.8 s
+#:   2026-09-23         360 s requested   988 -> 976 credits (task d9e64977...)
+#:                      candidates 359.9 s and 359.9 s
 VERIFIED_CREDITS_PER_GENERATION: dict[str, float] = {"V6": 12.0}
+#: Requested durations at which each verified price was measured. A price
+#: verified at both ends of the range is fixed per generation across it.
+PRICE_VERIFIED_AT_SECONDS: dict[str, tuple[float, ...]] = {"V6": (10.0, 360.0)}
 #: Optional emergency override per model (``SUNO_CREDITS_PER_GENERATION_V6=14``)
 #: for when the provider changes a price. Never required for a verified model.
 OVERRIDE_ENV_PREFIX = "SUNO_CREDITS_PER_GENERATION_"
@@ -379,6 +387,7 @@ class SunoMusic(BaseTool):
             "confirmed": True,
             "model": model,
             "source": source,
+            "verified_at_requested_seconds": list(PRICE_VERIFIED_AT_SECONDS.get(model, ())),
             "usd_per_credit": USD_PER_CREDIT,
             "credits_per_generation": credits,
             "usd_per_generation": round(credits * USD_PER_CREDIT, 4),

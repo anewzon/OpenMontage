@@ -140,6 +140,7 @@ stages:
       - render_runtime presented with both alternatives and logged as a decision
       - Paid audio estimated BEFORE any paid call, with plan_paid_audio, from the tools' own estimate_cost
       - Music planned as a programme from the channel's policy, not minute-for-minute against the runtime
+      - Music request length derived from the tool's contract; longest when the price is the same, shorter only with a recorded reason
       - Generated SFX planned in source seconds from the episode's needs, not the final runtime
       - Retry and rejection allowance stated explicitly and included in the estimate
       - Manually licensed footage recorded as external cost, excluded from API spend
@@ -255,6 +256,9 @@ stages:
       - Retries are new paid calls and are charged against the same budget
       - A provider pricing mismatch halts further paid calls until the operator resolves it
       - Every candidate from a paid music generation evaluated; candidate zero not accepted blindly
+      - Only the measured length of accepted candidates counts toward the programme, never the requested length
+      - Remaining music recalculated from accepted seconds before each call; generation stops at the target
+      - Retry allowance is a ceiling, never a quota - unused allowance is not spent
       - SFX derived from BRAND.md, the actual footage and the approved concept - no fixed category list
       - Good native clip audio preferred over generating an equivalent SFX layer
       - Long environmental beds generated as short loopable sources, not minute-for-minute

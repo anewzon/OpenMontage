@@ -29,8 +29,11 @@ from lib.config_model import BudgetMode
 from lib.relaxation_policy import (
     BudgetNotApproved,
     PaidCostUnavailable,
+    account_music_candidates,
     approved_budget_tracker,
     budget_summary,
+    generate_music_programme,
+    next_music_request,
     plan_paid_audio,
 )
 from schemas.artifacts import load_schema, validate_artifact
@@ -299,8 +302,9 @@ class TestApprovedBudget:
 
 
 def _music(**over) -> dict:
-    base = dict(tool="suno_music", tool_inputs={"model": "V6", "custom_mode": True},
-                unique_music_seconds=120, seconds_per_generation=130,
+    base = dict(tool="suno_music",
+                tool_inputs={"model": "V6", "custom_mode": True, "instrumental": True},
+                unique_music_seconds=120,
                 candidates_per_generation=2, accepted_per_generation=1, retry_allowance=1.0)
     return {**base, **over}
 
@@ -577,3 +581,287 @@ class TestChannelNeutrality:
         assert "phrase boundaries" in edit
         assert "never duplicate the whole mastered programme" in edit
         assert "metadata.music_programme" in edit
+
+
+
+# --------------------------------------------------------------------------
+# 7. Cost-efficient request length (derived from the tool contract)
+# --------------------------------------------------------------------------
+
+
+class DurationPricedTool(BaseTool):
+    """A music tool whose contract declares a duration range, priced per call."""
+
+    name = "duration_priced"
+    capability = "music_generation"
+    provider = "test"
+    input_schema = {"type": "object", "properties": {
+        "duration_seconds": {"type": "number", "minimum": 20, "maximum": 240}}}
+
+    def __init__(self, per_second: float = 0.0, flat: float = 0.05) -> None:
+        self.per_second, self.flat = per_second, flat
+
+    def estimate_cost(self, inputs):
+        return round(self.flat + self.per_second * float(inputs.get("duration_seconds") or 0), 4)
+
+    def execute(self, inputs):  # never reached in planning tests
+        raise AssertionError("planning must not execute a paid tool")
+
+
+def _plan_with(tool: BaseTool, **music_over) -> dict:
+    from tools.tool_registry import registry
+
+    registry.ensure_discovered()
+    registry.register(tool)
+    music = dict(tool=tool.name, tool_inputs={}, unique_music_seconds=600,
+                 candidates_per_generation=2, accepted_per_generation=1, retry_allowance=0.25)
+    music.update(music_over)
+    return plan_paid_audio(target_duration_seconds=1200, music=music)
+
+
+class TestCostEfficientRequestLength:
+    def test_v6_resolves_to_its_maximum_from_the_tool_contract(self):
+        plan = plan_paid_audio(target_duration_seconds=120, music=_music())
+        strategy = plan["metadata"]["music"]["generation_strategy"]
+        assert plan["metadata"]["music"]["seconds_per_generation"] == 360
+        assert strategy["range_seconds"] == [10, 360]
+        assert strategy["pricing_basis"] == "fixed_per_generation"
+        assert strategy["cost_at_min_usd"] == strategy["cost_at_max_usd"] == 0.06
+        assert strategy["source"] == "derived_from_tool_contract"
+
+    def test_planner_picks_the_longest_request_when_price_is_flat(self):
+        plan = _plan_with(DurationPricedTool(per_second=0.0))
+        assert plan["metadata"]["music"]["seconds_per_generation"] == 240
+        assert plan["metadata"]["music"]["base_requests"] == 3  # 600 / 240
+
+    def test_planner_does_not_blindly_pick_the_maximum_when_cost_rises(self):
+        with pytest.raises(ValueError) as exc:
+            _plan_with(DurationPricedTool(per_second=0.001))
+        assert "cost rises with requested duration" in str(exc.value)
+        plan = _plan_with(DurationPricedTool(per_second=0.001), seconds_per_generation=60,
+                          generation_duration_reason="provider bills per second")
+        assert plan["metadata"]["music"]["seconds_per_generation"] == 60
+        assert plan["metadata"]["music"]["generation_strategy"]["pricing_basis"] == "varies_with_duration"
+
+    def test_a_shorter_request_needs_a_recorded_reason(self):
+        with pytest.raises(ValueError) as exc:
+            plan_paid_audio(target_duration_seconds=120, music=_music(seconds_per_generation=130))
+        assert "generation_duration_reason" in str(exc.value)
+        plan = plan_paid_audio(target_duration_seconds=120, music=_music(
+            seconds_per_generation=130,
+            generation_duration_reason="short arranged cue for a 2-minute validation film"))
+        music = plan["metadata"]["music"]
+        assert music["seconds_per_generation"] == 130
+        assert music["generation_strategy"]["source"] == "caller"
+        assert "validation film" in music["generation_strategy"]["reason"]
+
+    def test_an_out_of_range_request_is_refused(self):
+        with pytest.raises(ValueError):
+            plan_paid_audio(target_duration_seconds=120, music=_music(
+                seconds_per_generation=400, generation_duration_reason="x"))
+
+    def test_a_model_without_duration_support_needs_an_explicit_length(self):
+        with pytest.raises((ValueError, PaidCostUnavailable)):
+            plan_paid_audio(target_duration_seconds=120, music=_music(
+                tool_inputs={"model": "V6", "custom_mode": False}))
+
+    def test_the_strategy_is_shown_to_the_operator(self):
+        text = budget_summary(plan_paid_audio(target_duration_seconds=120, music=_music()))
+        assert "Music generation strategy: suno V6 - 360 s requested per paid call" in text
+        assert "Pricing basis: fixed $0.06 per generation" in text
+        assert "Reason: maximum verified duration costs the same as minimum verified duration" in text
+
+    def test_long_form_plans_far_fewer_calls_than_the_old_short_request(self):
+        long_form = plan_paid_audio(target_duration_seconds=7200,
+                                    music=_music(unique_music_seconds=3300, retry_allowance=0.25))
+        music = long_form["metadata"]["music"]
+        assert music["base_requests"] == 10 and music["retry_requests"] == 3
+        assert long_form["cost_estimate"]["total_estimated_usd"] == pytest.approx(0.78)
+
+    def test_generic_code_names_no_provider_duration(self):
+        code = (ROOT / "lib" / "relaxation_policy.py").read_text(encoding="utf-8")
+        assert not re.search(r"360", code) and "suno" not in code.lower()
+        for name in ("proposal-director", "asset-director", "edit-director"):
+            text = (RELAX / f"{name}.md").read_text(encoding="utf-8")
+            assert not re.search(r"\b360\s*s(econds)?\b.*default", text, re.I)
+
+
+# --------------------------------------------------------------------------
+# 8. Execution: measured accepted seconds, stop at target, only via tracker
+# --------------------------------------------------------------------------
+
+
+class ScriptedMusicTool(BaseTool):
+    """Returns scripted candidates per call; counts every execution."""
+
+    name = "scripted_music"
+    capability = "music_generation"
+    provider = "test"
+
+    def __init__(self, batches, price=0.06, mismatch_on=None):
+        self.batches = list(batches)
+        self.price = price
+        self.mismatch_on = mismatch_on
+        self.calls = 0
+
+    def estimate_cost(self, inputs):
+        return self.price
+
+    def execute(self, inputs):
+        self.calls += 1
+        durations = self.batches[self.calls - 1]
+        stem = Path(inputs["output_path"])
+        cands = [{"index": i, "path": f"{stem}#{self.calls - 1}#{i}", "downloaded": True,
+                  "duration_seconds": inputs.get("duration_seconds")}
+                 for i in range(len(durations))]
+        data = {"candidates": cands, "task_id": f"t{self.calls}", "_measured": durations}
+        if self.mismatch_on == self.calls:
+            data["pricing_mismatch"] = {"message": "expected 12 credits, charged 20."}
+        return ToolResult(success=True, cost_usd=self.price, data=data)
+
+
+def _probe_from(tool):
+    def probe(path):
+        _, batch, index = path.split("#")
+        return tool.batches[int(batch)][int(index)]
+    return probe
+
+
+def _accept_all(cands):
+    return {c["index"]: {"accepted": True, "reason": "passes screen"} for c in cands}
+
+
+def _music_tracker(tmp_path, budget=1.0):
+    return _cap_tracker(tmp_path, budget, tools=("scripted_music",))
+
+
+class TestMeasuredProgramme:
+    def test_measured_accepted_length_counts_not_the_request(self):
+        cands = [{"index": 0, "path": "a", "downloaded": True, "duration_seconds": 360},
+                 {"index": 1, "path": "b", "downloaded": True, "duration_seconds": 360}]
+        out = account_music_candidates(
+            cands, {0: {"accepted": True, "reason": "fits"}, 1: {"accepted": False, "reason": "too bright"}},
+            probe={"a": 347.0, "b": 301.0}.get)
+        assert out["accepted_seconds"] == 347.0
+        assert out["candidates"][1]["accepted_seconds"] == 0.0
+        assert out["candidates"][1]["reason"] == "too bright"
+
+    def test_two_accepted_candidates_both_count_at_measured_length(self):
+        cands = [{"index": 0, "path": "a", "downloaded": True},
+                 {"index": 1, "path": "b", "downloaded": True}]
+        out = account_music_candidates(cands, {0: {"accepted": True}, 1: {"accepted": True}},
+                                       probe={"a": 355.5, "b": 348.25}.get)
+        assert out["accepted_seconds"] == 703.75
+
+    def test_every_candidate_needs_a_decision_and_a_measurement(self):
+        cands = [{"index": 0, "path": "a", "downloaded": True}]
+        with pytest.raises(ValueError):
+            account_music_candidates(cands, {}, probe=lambda p: 10.0)
+        with pytest.raises(ValueError):
+            account_music_candidates(cands, {0: {"accepted": True}}, probe=lambda p: None)
+
+    def test_generation_stops_once_the_target_is_met(self, tmp_path):
+        tool = ScriptedMusicTool([(359.9, 359.9), (359.9, 359.9), (359.9, 359.9)])
+        tracker = _music_tracker(tmp_path)
+        ledger = generate_music_programme(
+            tracker=tracker, tool=tool, inputs={"output_path": str(tmp_path / "m.mp3")},
+            target_seconds=680, evaluate=_accept_all, max_requests=3, probe=_probe_from(tool))
+        assert tool.calls == 1, "719.8 accepted s already meets 680 s"
+        assert ledger["stop"]["reason"] == "target_met"
+        assert ledger["accepted_seconds"] == pytest.approx(719.8)
+
+    def test_unused_retry_allowance_is_not_spent(self, tmp_path):
+        tool = ScriptedMusicTool([(300.0, 300.0)] * 5)
+        tracker = _music_tracker(tmp_path)
+        ledger = generate_music_programme(
+            tracker=tracker, tool=tool, inputs={"output_path": str(tmp_path / "m.mp3")},
+            target_seconds=1200, evaluate=_accept_all, max_requests=5, probe=_probe_from(tool))
+        assert tool.calls == 2 and ledger["requests_made"] == 2
+        assert tracker.budget_spent_usd == pytest.approx(0.12)
+
+    def test_rejections_drive_the_next_call_from_the_actual_remainder(self, tmp_path):
+        tool = ScriptedMusicTool([(340.0, 300.0), (350.0, 320.0)])
+        decisions = iter([
+            {0: {"accepted": True}, 1: {"accepted": False, "reason": "vocal-like pad"}},
+            {0: {"accepted": True}, 1: {"accepted": True}},
+        ])
+        tracker = _music_tracker(tmp_path)
+        ledger = generate_music_programme(
+            tracker=tracker, tool=tool, inputs={"output_path": str(tmp_path / "m.mp3")},
+            target_seconds=900, evaluate=lambda c: next(decisions), max_requests=4,
+            probe=_probe_from(tool))
+        assert [g["accepted_seconds"] for g in ledger["generations"]] == [340.0, 670.0]
+        assert tool.calls == 2 and ledger["stop"]["reason"] == "target_met"
+
+    def test_next_request_uses_the_actual_remaining_requirement(self, tmp_path):
+        tracker = _music_tracker(tmp_path)
+        tool = ScriptedMusicTool([])
+        step = next_music_request(target_seconds=3600, accepted_seconds=680, tracker=tracker,
+                                  tool=tool, inputs={}, requests_made=1, max_requests=13)
+        assert step["generate"] is True and step["remaining_seconds"] == 2920
+        done = next_music_request(target_seconds=3600, accepted_seconds=3601, tracker=tracker,
+                                  tool=tool, inputs={}, requests_made=11, max_requests=13)
+        assert done["generate"] is False and done["reason"] == "target_met"
+        assert tool.calls == 0
+
+    def test_the_request_ceiling_and_the_budget_stop_generation(self, tmp_path):
+        tool = ScriptedMusicTool([(100.0,)] * 9)
+        ledger = generate_music_programme(
+            tracker=_music_tracker(tmp_path), tool=tool,
+            inputs={"output_path": str(tmp_path / "m.mp3")}, target_seconds=10_000,
+            evaluate=_accept_all, max_requests=2, probe=_probe_from(tool))
+        assert tool.calls == 2 and ledger["stop"]["reason"] == "request_ceiling_reached"
+
+        tool = ScriptedMusicTool([(100.0,)] * 9)
+        ledger = generate_music_programme(
+            tracker=_music_tracker(tmp_path / "b", budget=0.13), tool=tool,
+            inputs={"output_path": str(tmp_path / "m.mp3")}, target_seconds=10_000,
+            evaluate=_accept_all, max_requests=9, probe=_probe_from(tool))
+        assert tool.calls == 2 and ledger["stop"]["reason"] == "budget_would_be_exceeded"
+
+    def test_every_call_goes_through_the_cost_tracker(self, tmp_path):
+        tool = ScriptedMusicTool([(200.0, 200.0)] * 3)
+        tracker = _music_tracker(tmp_path)
+        generate_music_programme(
+            tracker=tracker, tool=tool, inputs={"output_path": str(tmp_path / "m.mp3")},
+            target_seconds=1000, evaluate=_accept_all, max_requests=3, probe=_probe_from(tool))
+        executed = [e for e in tracker.entries if e["status"] == "completed"]
+        assert len(executed) == tool.calls == 3
+
+    def test_a_tool_outside_the_approved_plan_never_executes(self, tmp_path):
+        tool = ScriptedMusicTool([(200.0,)])
+        ledger = generate_music_programme(
+            tracker=_cap_tracker(tmp_path, 1.0, tools=()), tool=tool,
+            inputs={"output_path": str(tmp_path / "m.mp3")}, target_seconds=100,
+            evaluate=_accept_all, max_requests=3, probe=_probe_from(tool))
+        assert tool.calls == 0 and ledger["stop"]["reason"] == "reservation_refused"
+
+    def test_a_pricing_mismatch_stops_the_programme(self, tmp_path):
+        tool = ScriptedMusicTool([(100.0,)] * 5, mismatch_on=1)
+        tracker = _music_tracker(tmp_path)
+        ledger = generate_music_programme(
+            tracker=tracker, tool=tool, inputs={"output_path": str(tmp_path / "m.mp3")},
+            target_seconds=10_000, evaluate=_accept_all, max_requests=5, probe=_probe_from(tool))
+        assert tool.calls == 1 and ledger["stop"]["reason"] == "pricing_mismatch"
+        assert "scripted_music" in tracker._pricing_mismatches
+
+    def test_a_programme_resumes_from_recorded_progress(self, tmp_path):
+        tool = ScriptedMusicTool([(400.0,)])
+        ledger = generate_music_programme(
+            tracker=_music_tracker(tmp_path), tool=tool,
+            inputs={"output_path": str(tmp_path / "m.mp3")}, target_seconds=1000,
+            evaluate=_accept_all, max_requests=4, accepted_seconds=700, requests_made=2,
+            probe=_probe_from(tool))
+        assert tool.calls == 1 and ledger["requests_made"] == 3
+        assert ledger["stop"]["reason"] == "target_met"
+
+    def test_directors_require_measured_seconds_and_stopping(self, directors, manifest):
+        asset = _flat(directors["asset-director"])
+        assert "A requested length is not accepted music." in asset
+        assert "do not spend the unused retry allowance" in asset
+        proposal = _flat(directors["proposal-director"])
+        assert "the longest permitted request is chosen" in proposal
+        assert "generation_duration_reason" in proposal
+        focus = _focus(manifest, "assets")
+        assert "never the requested length" in focus
+        assert "retry allowance is a ceiling, never a quota" in focus

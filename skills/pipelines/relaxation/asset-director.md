@@ -271,6 +271,37 @@ Accept against the programme the proposal planned
 (`metadata.paid_audio_plan.music`): the target is **accepted unique seconds**,
 not a track count.
 
+### Count measured accepted seconds, and stop when the target is met
+
+**A requested length is not accepted music.** Count only the **measured**
+length of each **accepted** candidate — never the requested length, never the
+provider's reported length, and never a rejected candidate:
+
+```python
+from lib.relaxation_policy import account_music_candidates, next_music_request
+
+accounted = account_music_candidates(result.data["candidates"], decisions)
+accepted_seconds += accounted["accepted_seconds"]   # ffprobe-measured, accepted only
+```
+
+A 360-second request returning an accepted 347 s candidate and a rejected
+301 s one contributes **347 s** — not 360, and not 720. If both are good, both
+count at their measured lengths. If neither is, the call still cost money;
+record both rejection reasons.
+
+**Recalculate before every further call** with `next_music_request(...)`: it
+compares the target with what has actually been accepted, checks the request
+ceiling, prices the next call with the tool, and checks the tracker's usable
+budget. When the target is met it says stop — **do not spend the unused retry
+allowance**. The planned request count and retry allowance are a ceiling,
+never a quota. Any further call still goes through `tracker.run_tool`.
+
+`generate_music_programme(...)` runs exactly that loop — screen every
+candidate through your `evaluate` callback, count measured accepted seconds,
+stop on target, ceiling, budget, pricing mismatch or provider failure — and
+can resume from the accepted seconds and request count already recorded.
+Record the ledger it returns in `metadata.generated_audio`.
+
 ### SFX — derived from this episode, never from a list
 
 Decide which SFX this episode needs from, in order: the channel's `BRAND.md`,

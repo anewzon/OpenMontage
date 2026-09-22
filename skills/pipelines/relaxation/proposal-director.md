@@ -158,7 +158,8 @@ concept — a channel may want no music, or no generated SFX.
 channel's music policy in `BRAND.md` and decide, for this production:
 
 - how many seconds of **accepted unique** music to generate;
-- the requested length of each generated candidate;
+- the requested length of each paid generation — **normally left for the
+  planner to derive** (below);
 - how many candidates one paid request returns and how many you expect to
   accept (the tool's `supports.multiple_candidates` — every candidate is kept);
 - a stated **retry/rejection allowance** — rejected candidates are real money.
@@ -166,6 +167,31 @@ channel's music policy in `BRAND.md` and decide, for this production:
 The rest of the runtime is **reprised** in the edit (see the Edit Director). A
 short production may reasonably generate unique music for its whole length; a
 long one should not scale generation linearly. There is no house track count.
+
+### Request the longest cost-efficient generation by default
+
+Omit `seconds_per_generation` and `plan_paid_audio` derives it from the
+selected tool's own contract: the `duration_seconds` range in its input
+schema, checked against the chosen model with the tool's `dry_run`, and priced
+at both ends with its `estimate_cost`. **When a longer request costs the same
+as a shorter one, the longest permitted request is chosen** — it minimises paid
+calls. When cost rises with duration, nothing is chosen for you: state the
+length and why.
+
+The derived length, its range, the pricing basis and the reason are recorded
+in `metadata.paid_audio_plan.music.generation_strategy` and shown in the
+budget summary, so the operator sees them before approving.
+
+This is a cost default, not a creative rule. A short film may still request
+the long generation and use its strongest passage; the rest stays a
+legitimate project asset. To request shorter, pass `seconds_per_generation`
+**and** a concrete creative or provider reason in
+`generation_duration_reason` — the planner refuses a shorter request at the
+same price without one.
+
+**A requested length is a target, not delivered music.** The provider may
+return more or less. It sizes the estimate only; after generation, only the
+measured length of accepted candidates counts (see the Asset Director).
 
 ### Plan SFX in source seconds, from this episode
 
@@ -184,7 +210,7 @@ from lib.relaxation_policy import plan_paid_audio, budget_summary, PaidCostUnava
 plan = plan_paid_audio(
     target_duration_seconds=target,
     music={"tool": "suno_music", "tool_inputs": {...},
-           "unique_music_seconds": ..., "seconds_per_generation": ...,
+           "unique_music_seconds": ...,   # seconds_per_generation derived
            "candidates_per_generation": ..., "accepted_per_generation": ...,
            "retry_allowance": ...},
     sfx={"tool": "elevenlabs_sfx", "tool_inputs": {...},
