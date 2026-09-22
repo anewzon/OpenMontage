@@ -45,17 +45,106 @@ This is the most valuable thing you do. **Do not assume a whole file is usable.*
 Stock clips routinely open or close with a camera bump, a focus hunt, or an
 exposure shift.
 
+**Ranges come from inspection, not from a formula.** The second test recorded
+`usable_in: 0.6` and `usable_out: duration − 0.6` for all 56 clips. A constant
+trim applied to every file is not an analysis; it is a default wearing an
+analysis's clothes.
+
 For each visual asset, propose one or more usable in/out ranges that are steady,
-well-exposed and clean, and say what each range contains:
+well-exposed and clean, and record for each range:
 
-- subject (river, canopy, ridge, rain on leaves, …)
-- shot scale — wide / medium / detail
-- motion — static, slow pan, tracking, aerial, handheld
-- light — dawn, overcast, midday, golden, dusk
-- approximate dominant colour
+| Field | How it is established |
+|---|---|
+| `subject` | river, canopy, ridge, rain on leaves, … |
+| `shot_scale` | wide / medium / detail — **from looking at frames** |
+| `camera_motion` | static / drift / pan / tilt / tracking / push_in / pull_out — **measured** |
+| `camera_direction` | left / right / up / down / in / out, or null |
+| `camera_speed_band` | still / graceful / brisk / aggressive — **measured** |
+| `camera_steadiness` | steady / slightly_unsteady / shaky — **measured** |
+| `subject_motion` | still / gentle / moderate / strong — **measured, separately** |
+| `usable_seconds` | from inspection of this clip |
+| `season` | spring / summer / autumn / winter / indeterminate — from frames |
+| `weather` | clear / overcast / mist / rain / snow — from frames |
+| `light` | dawn / morning / overcast / midday / golden / dusk — from frames |
+| `environment` | the specific place-type this belongs to |
+| `dominant_colour` | approximate |
+| `loop_suspected` | **measured** |
+| `planned_role` | hero / advancing / transitional / breathing-room |
 
-Sample frames across each clip to ground this. Do not describe footage you have
-not looked at.
+`lib.camera_motion.sample_frames()` writes sampled frames to `work/`. Look at
+them. **Do not describe footage you have not looked at.**
+
+### Camera motion is MEASURED, and kept separate from subject motion (binding)
+
+**A fixed camera filming moving water is not a moving-camera shot.** Recording
+"motion: yes" because the water moves is the defect this rule exists to
+prevent — and the second test did worse than that: the manifest carried no
+motion field at all, and the film came out 84% locked-off water shots against
+a brief promising a cinematic journey.
+
+Measure both. Record both. Independently.
+
+```python
+from lib.camera_motion import analyse_clip, movement_profile
+
+m = analyse_clip(path)
+m.camera_motion, m.camera_direction, m.camera_speed_band, m.camera_steadiness
+m.subject_motion, m.subject_moving_fraction    # the water, recorded apart
+m.is_moving_camera                             # False for locked-off rapids
+m.is_relaxation_suitable_movement              # moving, graceful/brisk, steady
+m.loop_suspected
+```
+
+Why a library helper and not `video_analyzer`: that tool's
+`_classify_scene_motion` answers a different question — real video versus a pan
+over a still — and it imports `cv2`, **which is not installed on this
+machine**, so it returns `motion_type: "unknown"` for every clip here. Keep
+using `video_analyzer` for probing and scene detection; take camera motion from
+`lib.camera_motion`, which needs only numpy and FFmpeg.
+
+**A clip's title is not evidence.** Never accept footage because its title or
+description says "drone", "cinematic", "aerial" or "river". Two of the three
+"drone"-titled clips in this channel's existing pool measure as fully
+locked-off shots.
+
+**An unanalysed clip is `unknown`, never `static`.** If `analyse_clip` raises,
+record that the clip was not screened. Do not default it into a class.
+
+### Report the pool's movement profile
+
+Run `movement_profile()` over the accepted pool and record it under
+`metadata.inventory_stats.movement_profile`. State plainly:
+
+- how many clips carry genuine camera movement, and how many of those are
+  usable for relaxation (graceful or brisk **and** steady);
+- how many are locked-off shots of moving water;
+- which distinct camera motions exist — one kind repeated is not variety;
+- whether any aerial, gliding or forward-moving footage exists at all.
+
+**If the pool cannot support the approved concept's promised movement, say so
+here**, before the Scene Director tries to cast it. That is a procurement
+shortfall, not an editing problem. For reference, the second test's pool
+measured 47 of 56 static, 7 with any camera movement, 4 usable, no push-ins,
+28 loop-suspected.
+
+### Screen for season, light and environment coherence
+
+Record season, weather and light per clip **from frames**, then check the pool
+against the approved concept and report the answer:
+
+- Does enough footage actually match the promised season, time of day and
+  landscape to build the film that was approved?
+- Which accepted clips are **incompatible** with it?
+
+The second test shipped autumn foliage, bare winter trees, bright midday
+summer green and a saturated purple sunset inside a film sold as one autumn
+morning. It also passed through a road/causeway shot and a shot whose primary
+subject is a person — both listed in BRAND.md as avoid-by-default, and both of
+which this stage was supposed to reject.
+
+**Reject or deprioritise clips that are technically usable but visually
+repetitive.** Five near-identical rocky-stream close-ups are one shot with four
+spares; say so and rank them rather than admitting all five.
 
 ## 5. Cross-reference licences
 

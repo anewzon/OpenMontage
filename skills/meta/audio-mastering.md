@@ -49,6 +49,57 @@ sounds wrong.
 at 10%" is a guess, not a decision — measure each source and set its level from
 what it actually contains.
 
+#### Measure the ASSEMBLED stem, not the source files
+
+A stem's loudness after concatenation, crossfading and treatment is not the
+mean of its sources. Measured on this installation, a stem built from files
+averaging −16.3 LUFS came out at −9.9 LUFS once assembled; a gain derived from
+the source mean would have been 6 dB wrong.
+
+Assemble first, measure the assembly, then derive `gain = target − measured`.
+`lib/stem_balance.py` provides `measure_stem()` for exactly this.
+
+#### A percentage in a brief is a relationship, not a setting
+
+When a brief says "music 100%, water 40%, ambience 20%", those figures describe
+**relative prominence**. They are not input gains and they are not LUFS
+targets. Applied literally to raw recordings they invert the hierarchy they
+were meant to express, because different recordings arrive at different
+loudness.
+
+Convert the relationship into per-role targets relative to a **reference
+layer**, then derive gains from the measured built stems. Where the brief also
+states an engineering band ("6–8 dB below the music"), the band is the
+authority and a derived figure is a starting point to refine.
+
+#### Constrain a group as a group
+
+When a brief constrains several layers **together** — "forest, birds and wind
+combined at about 20%" — that allowance belongs to the group, not to each
+member. Giving three members the group's full allowance makes their combined
+output roughly 5 dB louder than asked, because equal sources sum by power: two
+equal stems land ~3 dB hotter than one, three ~4.8 dB hotter.
+
+Distribute the allowance so the members' **power sum** meets it —
+`lib.stem_balance.distribute_group()` — and verify the group's achieved level,
+not only each member's. A mix in which every layer hits its individual target
+while the group sums hot has still failed.
+
+#### Equal LUFS is not equal prominence
+
+Integrated loudness is a useful common currency, not a model of perception. A
+broadband bed and a sparse instrument at the same LUFS do not sit at the same
+apparent level; bandwidth, density and transient character all move where a
+layer seems to be. Measure to make a balance **reproducible**; listen to decide
+whether it is **right**.
+
+#### Inspect short-term behaviour, not only the integrated figure
+
+A stem whose integrated loudness is correct can still contain spikes that
+dominate the mix. Check the loudest and quietest short-term (3 s) windows and
+the spread between them — `measure_stem()` reports both. Transient-heavy
+material (birds, gusts) is where this matters most.
+
 ### Step 2: Process only to solve a stated problem
 
 EQ, compression and limiting are corrective tools, not default stages. Before
@@ -125,6 +176,8 @@ a listening review. **Never record a pass for a check that did not run.**
 | Criterion | 1 | 3 | 5 |
 |---|---|---|---|
 | Gain staging | Uniform guesses | Some measured | Every layer set from measurement and listening |
+| What was measured | Source files | Some stems | Every assembled stem, as it appears in the mix |
+| Grouped layers | Each member given the group's allowance | Group noticed | Allowance distributed by power; group's achieved level verified |
 | Processing | Applied by default | Mostly justified | Each stage solves a named problem |
 | Duration | Fixed length, truncated | Roughly aligned | Derived from the approved timeline |
 | Loudness | Single pass | Two-pass on WAV | Two-pass, verified on the encoded file |

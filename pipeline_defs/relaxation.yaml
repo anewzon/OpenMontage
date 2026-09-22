@@ -117,12 +117,19 @@ stages:
       - "free_auto: every asset carries provider, source URL, creator and licence"
       - "free_auto: downloaded files inspected on real content, not on search metadata"
       - Quantity is enough for the target duration at a sane reuse factor
+      - Search intent seeks the camera movement the channel's BRAND.md asks for
+      - No clip accepted on a title containing drone/cinematic/aerial - frames inspected
+      - Camera motion MEASURED on downloaded files, never inferred from metadata
+      - Acquired pool's movement_profile reported so its character is visible at the gate
+      - Season, weather and light checked against the approved concept before accepting
+      - A pool that cannot fulfil the concept is reported as a shortfall, not passed on
       - Human gate preserved in BOTH modes
       - Checkpoint written with status awaiting_human, then the turn ENDS
     success_criteria:
       - Checkpoint status is awaiting_human with the request or acquired pool in metadata
       - "licensed_manual: work/ASSET_LIST.md exists and is human-readable; nothing auto-downloaded"
       - "free_auto: assets present in the project workspace with provenance recorded"
+      - "free_auto: metadata.movement_profile present and derived from measured clips"
 
   # 4 - analyse what the human actually downloaded
   - name: assets
@@ -144,6 +151,17 @@ stages:
       - Runs only after the human confirmed assets were added
       - Every supplied file probed; native analysis tools used, not ad-hoc scripts
       - Usable sub-ranges identified per clip, not whole-file assumptions
+      - Usable ranges come from inspection, not a constant trim applied to every file
+      - "CAMERA motion measured per clip and recorded SEPARATELY from subject motion"
+      - A fixed camera filming moving water is recorded as static, never as movement
+      - Camera motion, direction, speed band and steadiness recorded per clip
+      - An unanalysed clip is recorded as unknown, never defaulted to static
+      - Shot scale, season, weather and light recorded from sampled frames
+      - metadata.inventory_stats.movement_profile reports the pool's movement variety
+      - A pool that cannot support the concept's promised movement is reported here
+      - Season/light incoherence against the concept surfaced, not left to the edit
+      - Visually repetitive near-duplicates ranked or rejected, not all admitted
+      - "BRAND.md avoid-list honoured: people as subject, roads, buildings rejected"
       - Clips below the delivery canvas flagged, never silently upscaled
       - Unsuitable assets rejected with a reason rather than forced in
       - Licence evidence cross-referenced; unverified assets flagged
@@ -155,6 +173,9 @@ stages:
       - Schema-valid asset_manifest artifact
       - Every asset has path, type, duration and a provenance note
       - metadata.inventory_stats present including the reuse factor
+      - Every accepted video asset carries a measured camera_motion value
+      - Every accepted video asset carries a subject_motion value recorded separately
+      - metadata.inventory_stats.movement_profile present
 
   # 5 - cast the concept onto the real footage
   - name: scene_plan
@@ -169,15 +190,28 @@ stages:
     human_approval_default: true
     review_focus:
       - Every slot references a real asset id and a real usable sub-range
-      - Shot scale and motion type recorded per slot
+      - "Shot scale, camera motion and subject motion recorded per slot, separately"
+      - Camera motion carried from the manifest's MEASURED values, not re-guessed
+      - The sequence shows a coherent progression and a real sense of travel
+      - Changes of perspective and scale are deliberate
+      - Aerial, moving-camera and closer immersive footage all used purposefully
+      - Season, weather and lighting are compatible across adjacent slots
+      - Season and light are consistent with the approved concept
+      - Shot durations chosen from actual visual interest, not a pattern
+      - No long run of similar stationary close-ups, even with moving water
+      - Strongest footage used to establish and advance the journey
+      - No prewritten movement structure forced onto footage that cannot carry it
       - No asset reused twice inside one movement
       - Cross-movement reuse is deliberate, spaced and justified
       - Per-movement ambience and music intent stated
       - Slot holds vary genuinely; no mechanical rotation
+      - Repetition screening performed BEFORE the render, with specific slots named
     success_criteria:
       - Schema-valid scene_plan artifact
       - Every slot resolves to an asset id present in asset_manifest
+      - Every slot's in/out range exists in that asset's usable ranges
       - Sum of slot holds within 10% of the approved duration
+      - Pre-render repetition and coherence screening recorded with numbers
 
   # 6 - timeline, sound design and grade
   - name: edit
@@ -206,10 +240,22 @@ stages:
       - render_runtime carried unchanged from the approved proposal
       - Shot durations vary; no run of near-identical holds
       - Transition vocabulary at most 4 values, each choice motivated
+      - Straight cuts carry most of the film; the dissolve is not the default
+      - Dissolve durations follow the actual shots, not a single constant
+      - metadata.transition_discipline recorded; its findings empty or answered
+      - No dissolve between shots with opposing camera motion or a large exposure jump
+      - Transition at_seconds are positions on the OVERLAP-CORRECTED timeline
+      - Timeline duration accounts for crossfade overlap, not the raw sum of holds
+      - "metadata.chunk_plan is a LIST of chunks with ids, start, end and cut ids"
+      - No chunk boundary falls on or beside an approved dissolve
       - No two adjacent cuts share subject AND scale
       - Audio layers declared with per-layer volume, offset and fades
-      - Per-layer gains DERIVED from measured stem levels, never left at provider default
-      - Music and water are the foundation; forest, birds and wind sit clearly below them
+      - Per-layer gains DERIVED from MEASURED BUILT STEMS, never from source means
+      - Per-layer gains never left at provider default
+      - "Mix is MUSIC-LED: music is the reference layer"
+      - Water supports the music and is not mixed as its peer
+      - "Supporting ambience assessed as a COMBINED GROUP, not per layer"
+      - Short-term extremes and transients inspected, not only integrated loudness
       - Balance verified on a short representative preview mix before the full render
       - J-cuts and L-cuts expressed as audio offsets, never video trims
       - Mixed soundscape normalised to 48 kHz stereo, loudness two-pass verified
@@ -221,6 +267,7 @@ stages:
       - Long-form coverage counted honestly - overlapping files are not extra coverage
       - Grade is restrained normalisation, not styling
       - metadata.chunk_plan present for any timeline over 20 minutes
+      - "metadata.audio_layers[] and metadata.mix_balance match the EXECUTED mix"
       - Every cut carries a reason that describes a decision
     success_criteria:
       - Schema-valid edit_decisions artifact
@@ -228,6 +275,10 @@ stages:
       - Mixed audio file reports 48000 Hz and 2 channels via ffprobe
       - Measured integrated loudness within 1 LU of target
       - Timeline duration within 5% of the approved duration
+      - Recorded timeline duration equals the overlap-corrected arithmetic
+      - Recorded mix duration equals the mixed file's real duration
+      - metadata.mix_balance records per-role built-stem loudness and applied gain
+      - validate_chunk_plan returns no violations against the approved transitions
 
   # 7 - chunked render + technical and editorial QC
   - name: compose
@@ -259,15 +310,27 @@ stages:
       - True peak measured with ebur128 on the ENCODED file, not sample peak on the WAV
       - Final fade verified present in the delivered file by measuring tail levels
       - Audio content reviewed - water coherence, layer balance, continuity
+      - "Mix confirmed MUSIC-LED: water supportive, not overpowering"
+      - Supporting ambience quiet and occasional; no abrupt layer changes
       - Loudness normalisation not used to repair an unbalanced mix
       - Checks that could not actually run are declared, never recorded as passes
+      - Subjective listening never reported as a pass when no listening occurred
       - Duration matches the planned timeline within 2 seconds
+      - "Rendered boundaries audited against the approved transition map"
+      - No unintended hard cut where a dissolve was approved
+      - No chunk boundary silently replaced an approved transition
+      - Rendered boundary frames inspected for duplicate, black, frozen frames
       - Editorial pass - no mechanical repetition, no stock-playlist feeling
+      - Camera-movement variety and aerial presence checked on the rendered file
+      - No ASMR-loop dominance; season, light and environment coherent
+      - Early creative screening used excerpts, not repeated full-film processing
       - Completed chunks preserved so a late failure resumes, never restarts
     success_criteria:
       - Schema-valid render_report artifact
       - output/final.mp4 exists and passes ffprobe validation
       - render_report.qc records resolution, fps, pix_fmt, audio, loudness, sync
+      - render_report.qc.transitions records the boundary audit and its method
+      - unexpected_cuts is empty for every audited boundary
       - Editorial findings recorded; any fail sends the run back to edit
 
   # 8 - export the ready-to-publish package (no upload)

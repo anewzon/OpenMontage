@@ -63,6 +63,9 @@ Render each chunk from `metadata.chunk_plan[]` into `work/chunks/`. After each:
 ffprobe it, confirm duration and stream parameters, and **leave it on disk**. If
 chunk 9 of 11 fails, chunks 1–8 must still be there — that is the entire point.
 
+Do not send a 120- or 180-minute film through a single enormous `xfade` graph.
+Use this chunk/resume path.
+
 All chunks share codec, resolution, fps, pixel format and audio parameters, so
 assemble with the concat demuxer and **stream copy**:
 
@@ -76,6 +79,40 @@ with `-c:v copy`.
 Write the deliverable to **`output/final.mp4`** — that exact name; the `publish`
 stage and the operator both depend on it. Chunks and intermediates stay in
 `work/`, never in `output/`.
+
+### The chunk plan must not edit the film (binding)
+
+The concat demuxer **cannot dissolve**. A chunk boundary placed on an approved
+crossfade therefore becomes a hard cut, and the film that ships is not the edit
+that was approved.
+
+That is exactly what the second test did. Its render plan recorded the
+substitution as a statement of fact — *"movement boundaries are straight cuts;
+all other transitions are 1.2s crossfades inside the chunks"* — and nothing
+failed. Measured on the delivered file, the three movement joins show
+single-frame differences of 20.2, 23.6 and 26.2 against local baselines of
+1.0–2.2: three hard cuts at 10.7× to 26.3× the surrounding change, where the
+edit had approved dissolves. The dropped overlaps also pushed the file 3.7 s
+past its prediction, which is why an 852.3 s timeline arrived as 864.03 s.
+
+Before rendering:
+
+```python
+from lib.transition_audit import validate_chunk_plan, safe_chunk_boundaries
+violations = validate_chunk_plan(transitions, boundaries)
+```
+
+If there are violations, **do not proceed and do not substitute a cut.** Either
+adjust the chunk plan — `safe_chunk_boundaries` picks boundaries that fall only
+on straight cuts — or render that boundary region as its own short
+`video_stitch` segment and concatenate it. Both preserve the editorial intent;
+dropping the dissolve does not.
+
+**Place chunk boundaries at technically safe positions without silently
+dropping or replacing approved transitions.** Account for crossfade overlap
+when computing chunk durations and cut offsets:
+`lib.transition_audit.timeline_duration` is the arithmetic. A chunk whose
+length is the raw sum of its holds will not line up.
 
 ## QC — technical
 
@@ -110,10 +147,12 @@ the **encoded** file; a WAV that met the ceiling can exceed it after AAC.
 | Area | Check |
 |---|---|
 | Music | No vocals or lyrics where the channel forbids them; mood and intensity appropriate; progression smooth |
-| Nature | Audible, coherent water foundation; environmental detail appropriate; no contaminated native audio; no two water beds contradicting each other |
-| Mix | Music/water balance; consistent gain; nothing masked; no overload, clipping or distortion; restrained dynamics; clean stereo and mono fold-down |
-| Continuity | Every music boundary, environmental crossover and reused-audio junction; the opening and the ending; no gaps, no truncated fade |
+| Hierarchy | **Is the mix music-led?** Water audibly *supports* the music rather than matching or overpowering it; the supporting group is quiet. Verify against the channel's stated relationship with `BalancePlan.verify()`, checking the **group's** achieved offset, not only each layer's |
+| Nature | Audible, coherent water foundation; forest ambience soft; birds occasional and restrained; wind very subtle with no intrusive hiss or harsh gusts; no contaminated native audio; no two water beds contradicting each other |
+| Mix | Consistent gain; nothing masked; **no abrupt layer changes**; no overload, clipping or distortion; restrained dynamics; clean stereo and mono fold-down; music not ducked under the water |
+| Continuity | Every music boundary, environmental crossover and reused-audio junction; the opening and the ending; **music and environmental audio continuous across picture transitions**; no gaps, no truncated fade |
 | Technical | Correct duration, sample rate, channels, integrated loudness, measured true peak, encoded audio, A/V sync at start, middle and end |
+| Consistency | `metadata.audio_layers[]` and `metadata.mix_balance` describe **the mix that was executed** — same duration, same gains. The second test recorded a 926.3 s timeline for an 864.03 s mix |
 
 **Duration:** the mixed audio must match the approved timeline. A mix longer
 than the picture means the ending was planned somewhere the viewer never
@@ -128,18 +167,62 @@ was in the command.
 > this session cannot listen, say so and request a listening review. **Never
 > record a pass for a check that did not run.**
 
+## QC — transitions
+
+Does the picture match the **approved transition map**? This is a measurement,
+not an impression.
+
+```python
+from lib.transition_audit import (
+    as_transitions, audit_rendered_boundaries, unexpected_cuts, audit_report)
+
+obs = audit_rendered_boundaries(
+    "output/final.mp4", transitions,
+    offset_seconds=opening_seconds,          # concatenated opening
+    only_at=chunk_boundaries + sampled_interior_joins)
+
+assert not unexpected_cuts(obs)              # the Test 2 defect
+report["qc"]["transitions"] = audit_report(obs, violations, discipline)
+```
+
+Check, and record:
+
+- **every chunk join**, plus a representative sample of interior joins — not
+  all several hundred boundaries of a two-hour film;
+- **no unintended hard cuts** where a dissolve was approved;
+- correct rendered transition **type and timing**;
+- editorial suitability between the actual adjacent shots;
+- consistent output format across chunk joins.
+
+Then **look at the rendered boundary frames** for duplicated frames, black
+flashes, abrupt exposure changes, broken overlaps, frozen frames and
+unexpected hard cuts. A boundary that measures correctly can still look wrong.
+
 ## QC — editorial
 
 The technical pass says the file is valid. This one says it is worth watching.
 Sample across the finished video and answer honestly:
 
 - obvious mechanical repetition in shot length or transition rhythm?
+- **genuine camera-movement variety, or is the film dominated by locked-off
+  shots?** Re-measure a sample with `lib.camera_motion` rather than trusting
+  the manifest.
+- **is there aerial or moving-camera footage where the concept promised it?**
+- **ASMR-loop dominance** — long runs of stationary water close-ups?
+- **coherent season, light and environment** across the film, and consistent
+  with the concept?
+- visual progression and shot diversity across movements?
 - poor shot choices, or shots that should have been rejected at `assets`?
+  (The second test passed a road/causeway shot and a shot whose primary
+  subject is a person — both avoid-by-default in `BRAND.md`.)
 - jarring transitions, or dissolves between unrelated subjects?
 - sequences that read as repeated?
 - ambience mismatched to the visible environment?
-- incoherent visual progression across movements?
 - **does this feel like a stock-footage playlist rather than a directed film?**
+
+**Use lightweight analysis and representative excerpts for early screening.**
+Do not re-process the entire long-form film for every minor creative check.
+Full-file technical QC still runs when a final video is produced.
 
 ## QC — brand
 

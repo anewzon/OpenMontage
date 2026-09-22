@@ -17,16 +17,68 @@ chain; treat any overlay as a separate declared segment.
 
 ## Transition vocabulary — at most four
 
-- **straight cut** — the default, and most of the film. Two shots sharing light
-  and rhythm cut cleanly, and a cut is calmer than a dissolve.
-- **crossfade** — between related subjects or continuous water/cloud movement,
-  and across movement boundaries. Long (1.5–3 s) for relaxation.
-- **fade through black** — sparingly, for a real break. Perhaps once or twice
-  in two hours.
-- one optional fourth if the material genuinely calls for it.
+- **straight cut** — the default, and most of the film. Use when shots connect
+  naturally in composition, movement, lighting and visual meaning. A cut is
+  calmer than a dissolve.
+- **crossfade** — **selectively**, between compatible views or environments,
+  when a gradual change genuinely improves the scene. Start with restrained
+  durations chosen from the actual shots.
+- **longer transition** — reserved for a deliberate major change of movement.
+- **fade through black** — only for a genuine narrative or structural break,
+  never as a recurring decorative device. Perhaps once or twice in two hours.
 
 Never alternate transitions on a fixed cycle to manufacture variety. A dissolve
 between unrelated shots reads as a mistake. **When in doubt, cut.**
+
+Avoid wipes, flashy digital effects and repeated fixed transition patterns.
+
+Where appropriate, **match incoming and outgoing motion direction, visual
+emphasis and colour.** Two shots whose cameras move in opposite directions do
+not dissolve well; neither do shots with a large exposure, colour or framing
+jump. The manifest's measured `camera_motion` and `camera_direction` are what
+you check this against.
+
+### Do not make the dissolve the default (binding)
+
+**Do not automatically apply a long 1.5–3 s dissolve to every boundary.** The
+second test put an identical 1.2 s crossfade on 55 of 56 joins. Its own
+approved proposal had said "straight cuts within movements, long crossfades at
+boundaries" — the edit inverted that, and the film lost the straight cut
+entirely.
+
+Check the shape of your own map before handing it on:
+
+```python
+from lib.transition_audit import as_transitions, transition_discipline
+d = transition_discipline(as_transitions(edit_decisions["transitions"]))
+d.dissolve_share, d.longest_identical_run, d.distinct_durations, d.findings
+```
+
+Record `d.to_metadata()` in `metadata.transition_discipline`. **Findings must
+be empty, or answered with a reason** — never carried forward silently.
+
+### Transition positions must be overlap-corrected
+
+A crossfade overlaps two shots, so **it consumes its own duration from the
+timeline.** 56 slots totalling 918.3 s joined by 55 × 1.2 s crossfades run for
+**852.3 s**, not 918.3 s.
+
+The second test recorded the un-corrected figure and wrote a 926.3 s length
+into `metadata.mix` and `metadata.mix_balance` for a picture that ran
+864.03 s — a 62-second disagreement between the recorded metadata and the
+executed mix.
+
+Use the arithmetic, and put the corrected number everywhere:
+
+```python
+from lib.transition_audit import timeline_duration
+body = timeline_duration([c["out_seconds"] - c["in_seconds"] for c in cuts],
+                         transitions)
+```
+
+Transition `at_seconds` values must be positions on the **overlap-corrected**
+timeline, so the Compose Director can find them in the rendered file. Positions
+from a raw cumulative sum of holds cannot be audited against the render.
 
 ### How transitions are actually produced
 
@@ -82,7 +134,7 @@ environmental ambience (A3), detail SFX such as birds or wind (A4), occasional
 texture (A5). These are conceptual groups, not a requirement to use exactly
 five files or five mixer inputs.
 
-### Balance: measured, then verified on a preview
+### Balance: from a stated relationship, via measured BUILT stems
 
 The first test sounded irritating for a structural reason, not an artistic one:
 layers were mixed near their provider defaults, and final loudness
@@ -90,25 +142,79 @@ normalisation was left to sort it out. **Normalisation moves the whole mix; it
 cannot fix the relationship between layers inside it.** A soundtrack whose
 birds sit on top of the music is still wrong at -16 LUFS.
 
-Set the balance from measurement, in this order:
+The second test fixed the method and still got the hierarchy wrong: it put the
+**water at parity with the music** (both -20 LUFS). Read the calling channel's
+`BRAND.md` for the intended relationship — which layer is the reference, and how
+far below it everything else sits — and do not assume any two layers are peers.
 
-1. **Measure every stem** before mixing anything — integrated loudness per
-   source file. Record the figures; they are the basis of the decision.
-2. **Assign a target level per role**, then derive each stem's gain as
-   `target - measured`. A gain that is identical across roles is a sign nobody
-   decided anything.
-3. **Foundation first.** Music (A1) and principal water (A2) carry the
-   programme. Forest ambience (A3) sits clearly beneath them. Birds and wind
-   (A4/A5) are occasional, quiet details — never a continuous bed, never
-   competing with the foundation.
-4. **Wind needs specific care.** Broadband wind reads as hiss and turns harsh
-   as it rises. Keep it low, keep it occasional, and roll off the top if it
-   sounds bright next to the water.
+Set the balance in this order:
 
-Record the chosen per-role targets and per-stem gains in
-`metadata.audio_layers[]` **and** in `metadata.mix_balance`, so a later episode
-reproduces the balance instead of rediscovering it. A balance that is not
-written down is not a channel standard.
+1. **Assemble each stem first**, to the intended timeline coverage —
+   concatenation, crossfades, any corrective treatment. The stem as it will
+   appear in the mix.
+
+2. **Measure the BUILT stem**, not the source files.
+
+   ```python
+   from lib.stem_balance import measure_stem
+   m = measure_stem("work/stems/A2-water.wav")   # ebur128 on the assembly
+   ```
+
+   **Do not regress to the mean loudness of the sources.** The second test
+   proved why: a water stem built from files averaging -16.3 LUFS measured
+   -9.9 LUFS once assembled. A gain derived from the source mean would have
+   been 6 dB wrong. The built-stem method is the part of Test 2 worth keeping —
+   keep it.
+
+3. **Solve the relationship**, with the reference layer as the anchor and the
+   supporting layers solved **as a group**:
+
+   ```python
+   from lib.stem_balance import BalanceSpec, GroupSpec, solve_balance
+   plan = solve_balance(spec, measured_built_lufs, water_role="A2-water")
+   plan.gains_db          # hand these to audio_mixer
+   plan.to_metadata()     # record in metadata.mix_balance
+   ```
+
+   **A percentage in a brief is a creative relationship, not a gain and not a
+   LUFS target.** Never apply `volume=1.0 / 0.4 / 0.2` to raw recordings —
+   different sources arrive at different loudness, and the result inverts the
+   hierarchy it was meant to set.
+
+4. **Group the supporting layers.** Forest, birds and wind share **one**
+   allowance between them. Giving each of them the group's full allowance makes
+   their combined output roughly 5 dB louder than intended, because three
+   equal sources sum. `solve_balance` distributes a group allowance by power so
+   the members **sum** to it.
+
+5. **Do not assume equal integrated LUFS means equal perceived prominence.**
+   Broadband water and sparse piano at the same LUFS do not sit at the same
+   apparent level. The derived figure is a starting point; refine inside the
+   channel's stated band using representative passages.
+
+6. **Inspect short-term behaviour and transients**, not just the integrated
+   figure. `measure_stem` reports the loudest and quietest 3-second windows;
+   a bird spike or a wind gust shows up there while the integrated number
+   looks fine. Wind especially: broadband wind reads as hiss and turns harsh
+   as it rises — keep it low, keep it occasional, roll off the top if it is
+   bright next to the water.
+
+7. **Verify the executed mix against the plan**, and check the relationship
+   rather than only the individual numbers:
+
+   ```python
+   v = plan.verify(remeasured_after_gain)   # per-role error + achieved offsets
+   v.achieved_group_offsets_db              # the group's real distance below music
+   ```
+
+**Avoid heavy compression, and never duck the music under the water.**
+
+Record the chosen targets, the measured built-stem figures and the applied
+gains in `metadata.audio_layers[]` **and** in `metadata.mix_balance`, so a
+later episode reproduces the balance instead of rediscovering it. Both must
+describe **the mix that was actually executed** — the second test left a
+926.3 s timeline in `metadata.mix` for an 864.03 s mix. A balance that is not
+written down is not a channel standard; one written down wrongly is worse.
 
 ### Verify on a short preview before the full render
 
@@ -230,9 +336,33 @@ have gone too far. Write graded paths back into `asset_manifest`.
 
 ## Chunk plan
 
-Any timeline over 20 minutes needs `metadata.chunk_plan[]` — chunk id, start and
-end seconds, cut ids. Target 10–20 minutes. **Chunk boundaries must fall on
-straight cuts, never inside a crossfade.**
+Any timeline over 20 minutes needs `metadata.chunk_plan[]` — **a list**, one
+entry per chunk, each with chunk id, start and end seconds, and cut ids. Target
+10–20 minutes.
+
+The second test wrote `{"enabled": true, "chunk_seconds": 240, "reason": ...}`
+instead: a policy, not a plan. Nothing downstream could check it, so the
+renderer invented its own boundaries at the movement joins — where the edit had
+approved crossfades — and replaced all three with hard cuts.
+
+**Chunk boundaries must fall on straight cuts, never inside or beside a
+crossfade.** Validate it here, not after the render:
+
+```python
+from lib.transition_audit import validate_chunk_plan, safe_chunk_boundaries
+
+violations = validate_chunk_plan(transitions, boundaries)
+if violations:
+    boundaries = safe_chunk_boundaries(
+        transitions, target_chunk_seconds=900, total_seconds=body)
+```
+
+If no straight cut sits near a target position, **move the boundary or render
+that boundary region as its own short stitched segment.** The editorial intent
+is the fixed quantity; the chunk plan is what bends. Record any adjustment and
+its reason in `metadata.chunk_plan`.
+
+**A non-empty `violations` list is not permission to change the transition.**
 
 ## Output
 

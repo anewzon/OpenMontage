@@ -79,34 +79,104 @@ metadata, with a Markdown view for the employee.
 
 ## What good procurement means for long-form relaxation
 
-Relaxation is unusual: the camera is mostly still, shots are held far longer
-than in any other format, and the viewer often has the video on for hours.
-That changes what counts as a good asset.
+Relaxation is unusual: shots are held far longer than in any other format, and
+the viewer often has the video on for hours. That changes what counts as a good
+asset.
 
-**Prefer, where the concept calls for it:**
+> **This section previously asked for the opposite of what the channel
+> wants.** It preferred "static, or a drift slow enough to be unnoticed" and
+> "movement supplied by the subject (water, leaves, mist), not by the camera".
+> That is why the second test's pool measured 47 of 56 clips locked-off with
+> only 4 usable moving-camera shots — the pool was not an accident, it was
+> requested. **Calm is not the same as motionless.** Read the calling channel's
+> `BRAND.md` for the movement it actually wants, and do not assume relaxation
+> means a still camera.
+
+**Prefer, where the concept and the channel call for it:**
 
 - **Long usable shots.** A held shot is the unit of this format. A clip whose
   steady section is only a few seconds is nearly worthless here even if it is
   beautiful, because it cannot carry a hold.
-- **Calm camera movement** — static, or a drift slow enough to be unnoticed.
+- **Smooth, unhurried camera movement** — slow aerial and drone reveals,
+  gliding and tracking moves, gentle pans, forward movement through a
+  landscape. This is what gives long-form relaxation a sense of travel; a pool
+  without it cannot deliver a journey.
+- **Genuine variety of camera movement** — several different kinds, not one
+  kind repeated.
 - **Stable, settled composition** that survives a long look.
 - **Environmental continuity** — light, season and weather that can sit next to
   the neighbouring shots without jarring.
-- **Natural visual rhythm** — movement supplied by the subject (water, leaves,
-  mist), not by the camera.
 - **Wide / medium / detail variety** across the pool, so the edit has scales to
   cut between.
+- **Some beautiful static compositions** for atmosphere and breathing room —
+  valuable as punctuation, **not as the pool's dominant character**.
 - **Ambience with genuine usable length** and a clean, un-processed character.
 - **Low visual distraction** — nothing that pulls the eye and breaks the spell.
 
 **Avoid, unless the concept explicitly wants it:**
 
-- aggressive or fast camera movement; rapid handheld
+- aggressive or fast camera movement; racing footage; rapid or shaky handheld
+- distracting speed ramps; artificial slow motion
 - commercial or lifestyle framing (models, products, staged activity)
-- speed ramps and timelapses
+- timelapses
 - baked-in heavy grades or stylised edits
 - clips that already loop
-- prominent human activity
+- prominent human activity; roads, traffic and built structures
+
+## Search for movement, then verify it on frames
+
+**Write search intent that can actually find camera movement.** Provider
+metadata is thin, so the query is the main lever. Combine a subject term with a
+movement term, and try several movement phrasings rather than one:
+
+```
+aerial river valley slow reveal      drone flying over forest river
+gliding over mountain stream         tracking shot along river
+forward moving through forest        slow pan river landscape
+descending over waterfall            flying low above water
+```
+
+Use the provider's own filters where they exist (length, orientation,
+resolution). Raising the minimum clip length remains the single most effective
+way to keep the clip count sane.
+
+### A title is not a measurement (binding)
+
+**Never accept a clip because its title, tags or description contain "drone",
+"cinematic", "aerial" or "river".** In this channel's existing pool, two of the
+three clips whose titles said "drone" measure as fully locked-off static shots.
+
+Screen the **downloaded file**:
+
+```python
+from lib.camera_motion import analyse_clip, movement_profile
+m = analyse_clip(downloaded_path)
+m.is_moving_camera                  # False for a locked-off shot of rapids
+m.is_relaxation_suitable_movement   # moving, graceful/brisk AND steady
+m.camera_motion, m.camera_direction, m.subject_motion, m.loop_suspected
+```
+
+Inspect actual frames and usable ranges too — a measured move across four
+unusable seconds is still unusable.
+
+**Report the acquired pool's `movement_profile()` in the procurement
+checkpoint**, so the operator approves a pool whose movement character is
+visible instead of discovering it in the finished film.
+
+### Concept-to-footage match is part of procurement
+
+If the concept promises morning light, autumn, mist or a particular landscape,
+**acquire footage that actually supports that promise**, and check season,
+weather and light on frames before accepting.
+
+Where the available pool cannot fulfil the approved concept, **acquire more
+appropriate footage, or surface the creative shortfall at this gate.** Do not
+hand a mismatched pool downstream and leave the edit to force it into a
+timeline — that is how autumn foliage, bare winter trees and a saturated purple
+sunset ended up inside one "autumn morning".
+
+**Reject or deprioritise clips that are technically usable but visually
+repetitive.** Rank near-duplicates; do not admit all of them.
 
 ## Duration is the constraint that bites
 

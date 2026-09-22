@@ -117,36 +117,135 @@ def test_channel_declares_per_role_targets() -> None:
         assert role in brand.lower(), f"BRAND.md balance table omits role: {role}"
 
 
-def test_foundation_sits_above_the_detail_layers() -> None:
-    """Parse the real numbers - prose alone would let the table drift."""
-    brand = _brand_or_skip()
-    targets: dict[str, float] = {}
+def _parse_prominences(brand: str) -> dict[str, float]:
+    """Read the prominence table's real percentages out of BRAND.md.
+
+    Prose alone would let the relationship drift, which is how the second test
+    came to mix water as a peer of the music while the channel file still
+    described a music-led programme.
+    """
+    prominences: dict[str, float] = {}
     for line in brand.splitlines():
-        # Only the balance table: "| **A1 — music** | −20 LUFS | ... |".
-        # Match the role in the FIRST cell, because a later cell may mention
-        # another role in prose ("a peer of the music").
-        m = re.match(
-            r"\|\s*\*\*A\d\s*[—-]\s*([^*|]+?)\s*\*\*\s*\|\s*[−-](\d+(?:\.\d+)?)\s*LUFS",
-            line,
-        )
+        if not line.lstrip().startswith("|"):
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) < 2:
+            continue
+        label = cells[0].lower()
+        # "**100% - the reference**" or "**~40% of the music's ...**"
+        m = re.search(r"~?\s*(\d+(?:\.\d+)?)\s*%", cells[1])
         if not m:
             continue
-        label = m.group(1).lower()
-        for role in FOUNDATION_ROLES + SUBORDINATE_ROLES:
-            if role in label:
-                targets[role] = -float(m.group(2))
-                break
+        value = float(m.group(1)) / 100.0
+        if "combined" in label or ("forest" in label and "wind" in label):
+            prominences["ambience_group"] = value
+        elif "water" in label:
+            prominences["water"] = value
+        elif "music" in label:
+            prominences["music"] = value
+    return prominences
 
-    for role in FOUNDATION_ROLES + SUBORDINATE_ROLES:
-        assert role in targets, f"no numeric target parsed for role: {role}"
 
-    foundation = min(targets[r] for r in FOUNDATION_ROLES)
-    for role in SUBORDINATE_ROLES:
-        assert targets[role] <= foundation - 8, (
-            f"{role} target {targets[role]} LUFS is not at least 8 LU below the "
-            f"foundation ({foundation} LUFS) - this is the defect that made the "
-            "first test irritating"
-        )
+def test_channel_states_a_music_led_relationship() -> None:
+    """Music is the reference; water and ambience sit beneath it."""
+    brand = _brand_or_skip()
+    parsed = _parse_prominences(brand)
+
+    for key in ("music", "water", "ambience_group"):
+        assert key in parsed, f"no prominence percentage parsed for: {key}"
+
+    assert parsed["music"] == 1.0, (
+        f"music must be the 100% reference layer, parsed {parsed['music']:.0%}"
+    )
+
+    # The exact Test 2 defect: water mixed as a peer of the music.
+    assert parsed["water"] < parsed["music"], (
+        "water must be SUBORDINATE to the music, not its peer - the second "
+        "test mixed both at -20 LUFS and the result was not music-led"
+    )
+    assert parsed["ambience_group"] < parsed["water"], (
+        "the combined supporting group must sit below the water"
+    )
+
+
+def test_supporting_ambience_is_constrained_as_one_group() -> None:
+    """Forest, birds and wind share one allowance between them.
+
+    Three layers each given the group's full allowance sum roughly 5 dB hotter
+    than asked. That arithmetic is what this rule exists to prevent.
+    """
+    brand = _brand_or_skip()
+    low = brand.lower()
+
+    assert "combined" in low, (
+        "BRAND.md must state that the supporting layers are constrained as a "
+        "COMBINED group"
+    )
+    assert re.search(r"(each|independent)", low), (
+        "BRAND.md must forbid giving each supporting layer its own allowance"
+    )
+
+    group_rows = [
+        line
+        for line in brand.splitlines()
+        if line.lstrip().startswith("|") and "combined" in line.lower()
+    ]
+    assert group_rows, "no combined-group row found in the prominence table"
+    row = " ".join(group_rows).lower()
+    for member in ("forest", "bird", "wind"):
+        assert member in row, f"the combined-group row omits {member}"
+
+
+def test_percentages_are_not_treated_as_gains_or_lufs_targets() -> None:
+    """The figures are a creative relationship, not settings."""
+    brand = _brand_or_skip()
+    low = brand.lower()
+    assert "creative relationship" in low, (
+        "BRAND.md must say the percentages express a creative relationship"
+    )
+    assert "input gains" in low, (
+        "BRAND.md must forbid applying the percentages as input gains"
+    )
+    assert "final lufs targets" in low, (
+        "BRAND.md must forbid reading the percentages as LUFS targets"
+    )
+    assert "reference layer" in low and "does not mean loud" in low, (
+        'BRAND.md must state that music at "100%" means reference, not loud'
+    )
+
+
+def test_channel_states_engineering_bands_for_the_relationship() -> None:
+    """A creative relationship needs a reproducible dB interpretation."""
+    brand = _brand_or_skip()
+
+    bands: dict[str, tuple[float, float]] = {}
+    for line in brand.splitlines():
+        if not line.lstrip().startswith("|"):
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) < 2:
+            continue
+        m = re.search(r"(\d+)\s*[–-]\s*(\d+)\s*dB", cells[1])
+        if not m:
+            continue
+        label = cells[0].lower()
+        band = (float(m.group(1)), float(m.group(2)))
+        if "group" in label or "combined" in label:
+            bands["ambience_group"] = band
+        elif "water" in label:
+            bands["water"] = band
+
+    assert "water" in bands, "BRAND.md states no dB band for the water"
+    assert "ambience_group" in bands, (
+        "BRAND.md states no dB band for the combined supporting group"
+    )
+    assert min(bands["water"]) > 0, (
+        "the water band must be stated as dB BELOW the music reference"
+    )
+    assert min(bands["ambience_group"]) >= max(bands["water"]), (
+        f"the supporting group's band {bands['ambience_group']} does not sit "
+        f"clearly below the water's band {bands['water']}"
+    )
 
 
 def test_pipeline_does_not_hardcode_the_channel_targets(edit_director: str) -> None:
