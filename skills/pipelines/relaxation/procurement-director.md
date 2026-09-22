@@ -26,7 +26,7 @@ procurement means for long-form relaxation.
 ## Sourcing modes
 
 This stage supports **two** sourcing approaches. The mode comes from the
-approved `proposal_packet` (`production_plan.sourcing`), never from a
+approved `proposal_packet` (`metadata.sourcing`), never from a
 hard-coded channel rule — the same pipeline serves both.
 
 | Mode | What it means |
@@ -156,22 +156,36 @@ Work through this before any track is accepted:
 7. **Approve a coherent programme** before editing starts, not track by track
    as the edit proceeds.
 
-### Screening vocals — the honest procedure
+### Screening music — automated, honest, bounded
 
-**Metadata does not prove a track is instrumental.** A title, a tag, a category
-called "instrumental" and a search term are all hints, never evidence.
+Music selection is **automated**. It runs on provider metadata, titles,
+descriptions, tags, duration and licensing, plus any lightweight preview the
+provider already exposes. No vocal-detection model, no transcription pass and
+no per-track operator audition.
 
-Screen in this order, and record which step actually decided it:
+Screen in this order and record which step actually decided it:
 
-- **Title/tag pre-filter** — cheap rejection of anything naming vocals, choir,
-  lyrics, a singer, or a featured vocalist. This *rejects*; it never *accepts*.
-- **Audible review** — listen across the track, not only the first seconds.
-  Vocals frequently enter after an instrumental intro, which is exactly what a
-  brief listen misses.
-- **If no audible review is possible in this session**, mark the track
-  `vocals_unverified` and **escalate for an operator decision.** Do not record
-  a pass. Do not state or imply that a detector cleared it when no detector
-  ran.
+- **Reject on metadata.** Drop anything naming vocals, lyrics, a singer,
+  vocal chops, choir, or a mood the channel forbids — dramatic, cinematic
+  rises, aggressive percussion. Rejection on metadata is cheap and reliable.
+- **Reject on measured content.** Probe the downloaded file: duration,
+  loudness, dynamic range and spectral balance. A track that is too loud, too
+  dynamic or too bright for a sleep-adjacent programme is rejected on numbers,
+  not vibes.
+- **Choose from a pool, never result[0].** The tools return the first match;
+  vary the query and compare several candidates before accepting one.
+- **Record the evidence honestly.** State exactly what was checked. Metadata
+  screening does **not** prove a track contains no vocals, and the record must
+  never imply a detector ran when none did. Say what was checked, and stop —
+  the limitation is disclosed, not treated as a blocker.
+
+**Metadata-based selection is approved and sufficient for routine
+procurement.** There is no `vocals_unverified` hard stop: an uncertain track
+is simply an ordinary candidate that later review may replace.
+
+**If a track proves unsuitable during audio review or QC, replace it.** That
+is the correction path — a normal, cheap swap late in the process, not a gate
+early in it.
 
 The channel's prohibited-content list is in its `BRAND.md` and is binding —
 this pipeline does not restate a house musical taste, because another

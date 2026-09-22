@@ -109,7 +109,7 @@ stages:
     checkpoint_required: true
     human_approval_default: true
     review_focus:
-      - Sourcing mode read from proposal_packet.production_plan.sourcing, not assumed
+      - Sourcing mode read from proposal_packet.metadata.sourcing, not assumed
       - Requests derive from the approved concept, not a generic shopping list
       - Every request states media type, purpose, preferred spec and destination
       - "licensed_manual: item URLs verified, or precise search instructions instead; no fabricated URLs"
@@ -150,7 +150,7 @@ stages:
       - Reuse factor reported against the approved duration
       - "Every clip's native audio classified USE / USE_AFTER_TREATMENT / REJECT / NO_AUDIO"
       - Usable native audio has a MEASURED level, never a blanket percentage
-      - Music auditioned for vocals; unverifiable tracks marked and escalated, never passed
+      - Music screened on metadata and measured content; evidence recorded without overclaiming
     success_criteria:
       - Schema-valid asset_manifest artifact
       - Every asset has path, type, duration and a provenance note
@@ -208,6 +208,9 @@ stages:
       - Transition vocabulary at most 4 values, each choice motivated
       - No two adjacent cuts share subject AND scale
       - Audio layers declared with per-layer volume, offset and fades
+      - Per-layer gains DERIVED from measured stem levels, never left at provider default
+      - Music and water are the foundation; forest, birds and wind sit clearly below them
+      - Balance verified on a short representative preview mix before the full render
       - J-cuts and L-cuts expressed as audio offsets, never video trims
       - Mixed soundscape normalised to 48 kHz stereo, loudness two-pass verified
       - Mix length DERIVED from the approved timeline, not a round number
@@ -255,7 +258,8 @@ stages:
       - "Delivered file has EXACTLY one audio stream - the approved mix, mapped 0:v + 1:a"
       - True peak measured with ebur128 on the ENCODED file, not sample peak on the WAV
       - Final fade verified present in the delivered file by measuring tail levels
-      - Audio content reviewed - vocals, water coherence, balance, continuity
+      - Audio content reviewed - water coherence, layer balance, continuity
+      - Loudness normalisation not used to repair an unbalanced mix
       - Checks that could not actually run are declared, never recorded as passes
       - Duration matches the planned timeline within 2 seconds
       - Editorial pass - no mechanical repetition, no stock-playlist feeling

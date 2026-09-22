@@ -82,6 +82,46 @@ environmental ambience (A3), detail SFX such as birds or wind (A4), occasional
 texture (A5). These are conceptual groups, not a requirement to use exactly
 five files or five mixer inputs.
 
+### Balance: measured, then verified on a preview
+
+The first test sounded irritating for a structural reason, not an artistic one:
+layers were mixed near their provider defaults, and final loudness
+normalisation was left to sort it out. **Normalisation moves the whole mix; it
+cannot fix the relationship between layers inside it.** A soundtrack whose
+birds sit on top of the music is still wrong at -16 LUFS.
+
+Set the balance from measurement, in this order:
+
+1. **Measure every stem** before mixing anything — integrated loudness per
+   source file. Record the figures; they are the basis of the decision.
+2. **Assign a target level per role**, then derive each stem's gain as
+   `target - measured`. A gain that is identical across roles is a sign nobody
+   decided anything.
+3. **Foundation first.** Music (A1) and principal water (A2) carry the
+   programme. Forest ambience (A3) sits clearly beneath them. Birds and wind
+   (A4/A5) are occasional, quiet details — never a continuous bed, never
+   competing with the foundation.
+4. **Wind needs specific care.** Broadband wind reads as hiss and turns harsh
+   as it rises. Keep it low, keep it occasional, and roll off the top if it
+   sounds bright next to the water.
+
+Record the chosen per-role targets and per-stem gains in
+`metadata.audio_layers[]` **and** in `metadata.mix_balance`, so a later episode
+reproduces the balance instead of rediscovering it. A balance that is not
+written down is not a channel standard.
+
+### Verify on a short preview before the full render
+
+Render a **short representative preview** of the mixed soundscape — a couple of
+minutes that includes the layers at their intended levels — and check it before
+committing to the full encode. Measure it: per-band energy, the relationship
+between stems, and whether any detail layer is louder than the foundation.
+
+**State plainly what could not be verified.** Where the balance cannot actually
+be judged by listening in this session, say so, attach the preview, and get
+operator approval on the preview before the full render. An unverified balance
+disclosed is fine; an unverified balance reported as checked is not.
+
 ### Native clip audio
 
 The Asset Director classified each clip's own audio as `USE`,
