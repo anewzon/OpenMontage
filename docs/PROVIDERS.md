@@ -476,7 +476,7 @@ machine-readable Atlas page and should be reconfirmed before a paid batch.
 
 > **Premium voice quality.** Best TTS for narration-heavy videos. Also generates music and sound effects.
 
-**Tools unlocked:** `elevenlabs_tts`, `music_gen`
+**Tools unlocked:** `elevenlabs_tts`, `music_gen`, `elevenlabs_sfx`
 **Env var:** `ELEVENLABS_API_KEY`
 
 #### Setup
@@ -1019,7 +1019,7 @@ Gen-3 Alpha Turbo and Gen-4 Aleph were removed from the Runway API on
 
 ### Suno — AI Music Generation
 
-> **Full songs with vocals and lyrics.** Any genre, up to 8 minutes. Instrumentals or vocal tracks.
+> **Full songs with vocals and lyrics.** Any genre. Instrumentals or vocal tracks. Current models `V6` (default), `V6_WILD`, `V6_MINI`; custom mode sets the track length (10–360 s).
 
 **Tools unlocked:** `suno_music`
 **Env var:** `SUNO_API_KEY`
@@ -1031,6 +1031,10 @@ Gen-3 Alpha Turbo and Gen-4 Aleph were removed from the Runway API on
 3. Navigate to the dashboard and copy your API key
 4. Add credits (1 credit = $0.005 USD)
 5. Add to `.env`: `SUNO_API_KEY=your-key-here`
+6. Confirm how many credits one generation costs on your dashboard and add
+   `SUNO_CREDITS_PER_GENERATION=<credits>` — `suno_music` refuses paid
+   generation until this is set, because sunoapi.org does not publish the V6
+   per-generation cost.
 
 #### Pricing
 
@@ -1042,7 +1046,7 @@ Gen-3 Alpha Turbo and Gen-4 Aleph were removed from the Runway API on
 | Pro | $10/mo | 2,500/mo | Commercial license |
 | Premier | $30/mo | 10,000/mo | Commercial license |
 
-**API (via sunoapi.org):** Pay-as-you-go, 1 credit = $0.005. Each generation produces 2 tracks.
+**API (via sunoapi.org):** Pay-as-you-go, 1 credit = $0.005. Each generation returns 2 candidate tracks; `suno_music` downloads both. Credits per generation are not published for V6 — confirm them from your dashboard (see step 6). `suno_music` with `operation: "credits"` reads the remaining balance at no cost.
 
 ---
 
@@ -1417,7 +1421,7 @@ These tools require only FFmpeg or Python packages — no GPU, no API key.
 | **Piper** | — (install only) | `piper_tts` | Free |
 | **Azure AI Speech** | `AZURE_SPEECH_KEY` + `AZURE_SPEECH_REGION` | `azure_stt`, `azure_tts` | Free tier + paid |
 | **Google** | `GOOGLE_API_KEY` (or `GEMINI_API_KEY`) | `google_tts`, `google_imagen`, `google_music`, `gemini_omni_video`, `veo_video` | Free tier (TTS) + paid |
-| **ElevenLabs** | `ELEVENLABS_API_KEY` | `elevenlabs_tts`, `music_gen` | Free tier + paid |
+| **ElevenLabs** | `ELEVENLABS_API_KEY` | `elevenlabs_tts`, `music_gen`, `elevenlabs_sfx` | Free tier + paid |
 | **fish.audio** | `FISH_AUDIO_API_KEY` | `fish_audio_tts` | Free tier (s2.1-pro-free) + paid |
 | **fal.ai** | `FAL_KEY` | `flux_image`, `recraft_image`, `kling_video`, `veo_video`, `seedance_video`, `gemini_omni_fal`, `minimax_fal_video` | Pay-as-you-go |
 | **Atlas Cloud** | `ATLASCLOUD_API_KEY` | `atlas_image`, `atlas_video` | Pay-as-you-go |

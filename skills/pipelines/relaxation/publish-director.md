@@ -76,7 +76,10 @@ If a configured image-generation provider is already available it may be
 offered under the normal provider/decision rules — announce it, get approval,
 and it **must accurately represent the actual video**. A generated scene that
 never appears is misleading packaging. Never require a paid provider just to
-ship. **Do not clone competitor thumbnails.**
+ship. A paid call is only possible inside the approved budget, through
+`approved_budget_tracker(...).run_tool(...)`, and a provider absent from the
+approved estimate needs a re-approved budget first. **Do not clone competitor
+thumbnails.**
 
 ## `output/publish.txt`
 

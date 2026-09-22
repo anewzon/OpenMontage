@@ -98,10 +98,16 @@ class CostTracker:
 
     # ---- Core operations ----
 
-    def estimate(self, tool: str, operation: str, estimated_usd: float) -> str:
+    def estimate(
+        self,
+        tool: str,
+        operation: str,
+        estimated_usd: float,
+        details: Optional[str] = None,
+    ) -> str:
         """Record an estimate. Returns entry ID."""
         entry_id = self._new_id()
-        self.entries.append({
+        entry = {
             "id": entry_id,
             "tool": tool,
             "operation": operation,
@@ -110,7 +116,10 @@ class CostTracker:
             "reserved_usd": 0.0,
             "actual_usd": 0.0,
             "timestamp": self._now(),
-        })
+        }
+        if details:
+            entry["details"] = details
+        self.entries.append(entry)
         self._save()
         return entry_id
 
@@ -170,13 +179,53 @@ class CostTracker:
         entry["timestamp"] = self._now()
         self._save()
 
-    def refund(self, entry_id: str) -> None:
+    def refund(self, entry_id: str, reason: Optional[str] = None) -> None:
         """Cancel a reservation without executing."""
         entry = self._find(entry_id)
         entry["status"] = EntryStatus.REFUNDED.value
         entry["reserved_usd"] = 0.0
         entry["timestamp"] = self._now()
+        if reason:
+            entry["details"] = "; ".join(filter(None, [entry.get("details"), reason]))
         self._save()
+
+    def run_tool(
+        self,
+        tool: Any,
+        inputs: dict[str, Any],
+        operation: str = "execute",
+        details: Optional[str] = None,
+    ) -> Any:
+        """Run one paid tool call through the full lifecycle.
+
+        estimate -> reserve -> execute -> reconcile, persisted at every step.
+        The tool is **never executed** when the reservation is refused:
+        `BudgetExceededError` (cap mode) and `ApprovalRequiredError` propagate
+        after the entry is marked refunded, so a blocked call is still on the
+        record. An estimate the tool cannot produce (its `estimate_cost`
+        raises) propagates before anything is recorded or executed.
+
+        Each call is one paid operation. A retry is simply another `run_tool`
+        call, reserved and reconciled like the first.
+        """
+        estimated = float(tool.estimate_cost(inputs))
+        entry_id = self.estimate(tool.name, operation, estimated, details=details)
+        try:
+            self.reserve(entry_id)
+        except (BudgetExceededError, ApprovalRequiredError) as exc:
+            self.refund(entry_id, reason=f"blocked before execution: {exc}")
+            raise
+        try:
+            result = tool.execute(inputs)
+        except Exception:
+            # Outcome unknown: account for the estimate rather than for nothing.
+            self.reconcile(entry_id, estimated, success=False)
+            raise
+        actual = getattr(result, "cost_usd", None)
+        if not isinstance(actual, (int, float)):
+            actual = estimated
+        self.reconcile(entry_id, float(actual), success=bool(getattr(result, "success", False)))
+        return result
 
     # ---- Reference-driven estimation ----
 
@@ -492,8 +541,9 @@ class CostTracker:
             "budget_total_usd": self.budget_total_usd,
             "budget_reserved_usd": round(self.budget_reserved_usd, 4),
             "budget_spent_usd": round(self.budget_spent_usd, 4),
-            "approved_tools": sorted(self._approved_tools),
             "entries": self.entries,
+            # Under metadata: the cost_log schema allows no other top-level key.
+            "metadata": {"approved_tools": sorted(self._approved_tools)},
         }
         self.cost_log_path.parent.mkdir(parents=True, exist_ok=True)
         with open(self.cost_log_path, "w") as f:
@@ -504,7 +554,10 @@ class CostTracker:
             data = json.load(f)
         self.entries = data.get("entries", [])
         self.budget_total_usd = data.get("budget_total_usd", self.budget_total_usd)
-        self._approved_tools = set(data.get("approved_tools", []))
+        self._approved_tools = set(
+            (data.get("metadata") or {}).get("approved_tools")
+            or data.get("approved_tools", [])  # logs written before the move
+        )
 
     # ---- Helpers ----
 

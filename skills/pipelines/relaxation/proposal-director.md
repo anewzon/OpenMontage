@@ -21,7 +21,7 @@ The selected concept must specify:
 - **target experience** — what the viewer feels, and when they would watch
 - **approximate duration**
 - **visual progression** — the movements, named, with rough minutes each
-- **environment types** — which waters, which light, which weather
+- **environment types** — which settings, which light, which weather
 - **pacing direction** — where it breathes, where it moves
 - **soundscape direction** — how music and ambience evolve across movements
 - **packaging hypothesis** — a provisional title and thumbnail idea
@@ -140,18 +140,102 @@ listing **every** runtime considered, with `rejected_because` on each one not
 chosen. A decision log naming only one runtime when others were available is a
 critical reviewer finding. Wait for explicit approval before advancing.
 
-## Cost
+## Cost — estimated here, before anything is spent (binding)
 
-`cost_estimate` is **0.00 USD**. This pipeline uses local licensed assets and
-local FFmpeg. No generative video, image, music or TTS provider is called. If
-something appears to require a paid provider, stop and raise it rather than
-spending.
+Production cost is **not** automatically zero any more. Footage, mixing and
+rendering cost nothing metered, but generated music and generated SFX are paid
+API calls. **Every paid call in this production is priced at this stage and
+approved by the operator before the first one runs.**
+
+The pipeline's preferred paid providers are `suno_music` (music) and
+`elevenlabs_sfx` (SFX), both ordinary registry tools. Whether an episode uses
+them at all, and how much, comes from the channel's `BRAND.md` and this
+concept — a channel may want no music, or no generated SFX.
+
+### Plan music as a programme, not minute-for-minute
+
+**Do not assume `final duration == unique generated music`.** Read the
+channel's music policy in `BRAND.md` and decide, for this production:
+
+- how many seconds of **accepted unique** music to generate;
+- the requested length of each generated candidate;
+- how many candidates one paid request returns and how many you expect to
+  accept (the tool's `supports.multiple_candidates` — every candidate is kept);
+- a stated **retry/rejection allowance** — rejected candidates are real money.
+
+The rest of the runtime is **reprised** in the edit (see the Edit Director). A
+short production may reasonably generate unique music for its whole length; a
+long one should not scale generation linearly. There is no house track count.
+
+### Plan SFX in source seconds, from this episode
+
+Generated SFX is planned from what **this** episode needs — the channel's
+`BRAND.md`, the approved concept's movements, and the footage you expect —
+never from a fixed list of sound types. Long beds are built later from short
+**loopable** sources, so the plan counts generated source seconds, not film
+runtime. Where good native clip audio is expected to carry a scene, plan no
+generated equivalent for it.
+
+### Compute it with the tools' own prices
+
+```python
+from lib.relaxation_policy import plan_paid_audio, budget_summary, PaidCostUnavailable
+
+plan = plan_paid_audio(
+    target_duration_seconds=target,
+    music={"tool": "suno_music", "tool_inputs": {...},
+           "unique_music_seconds": ..., "seconds_per_generation": ...,
+           "candidates_per_generation": ..., "accepted_per_generation": ...,
+           "retry_allowance": ...},
+    sfx={"tool": "elevenlabs_sfx", "tool_inputs": {...},
+         "sources": [{"purpose": ..., "duration_seconds": ..., "count": ...}],
+         "retry_allowance": ...},
+)
+proposal_packet["cost_estimate"] = plan["cost_estimate"]
+proposal_packet["metadata"]["paid_audio_plan"] = plan["metadata"]
+print(budget_summary(plan))
+```
+
+Omit `music` or `sfx` when the episode does not generate it. Prices come from
+each tool's `estimate_cost()` — never type a price into this plan.
+
+**If a paid provider cannot be priced, `PaidCostUnavailable` is raised. Stop
+and report the setting the operator must confirm** (the error names it). Never
+make an unpriced paid call to discover what it costs.
+
+Manually licensed footage is recorded as a zero-cost line marked **externally
+managed** — the human's subscription or licence is not an API charge and is not
+counted as automated spend unless the operator defines a per-project
+allocation. Local mixing, rendering and QC carry no metered cost.
+
+### The operator approves the concept AND the maximum budget
+
+Show the `budget_summary()` block with the concept options. The operator
+approves the concept and a **maximum paid budget**. Record the figure as
+`approval.approved_budget_usd` — the existing schema field; do not create a
+separate budget file — and log the choice as a `budget_tradeoff` decision.
+
+Once approved, generation proceeds automatically **inside** that cap. If the
+plan later changes materially — a longer programme, more SFX, a different
+provider — append a new decision-log entry, recalculate with
+`plan_paid_audio`, and get the revised budget approved **before** spending.
+
+### No silent provider substitution
+
+If a preferred paid provider is unavailable (no credential, unpriced, failing),
+report it, list the registry's alternatives for that capability
+(`registry.get_by_capability("music_generation")`, `("sfx_generation")`, and the
+music library/search capabilities) with their cost and quality differences, and
+wait for the operator's choice. Record it as a `provider_selection` decision. A
+provider that is merely unconfigured is a setup step, not a code fault.
 
 ## Output
 
 Schema-valid `proposal_packet` with `concept_options`, `selected_concept`,
-`production_plan` (including `render_runtime`), `cost_estimate` and `approval`,
-plus `metadata.target_duration_seconds` and `metadata.opening`.
+`production_plan` (including `render_runtime`), `cost_estimate` and `approval`
+(with `approved_budget_usd` whenever any line is paid), plus
+`metadata.target_duration_seconds`, `metadata.opening` and
+`metadata.paid_audio_plan`.
 
 `production_plan`, `selected_concept`, `cost_estimate` and `approval` are all
 **closed** schema objects — adding a field to any of them fails validation.

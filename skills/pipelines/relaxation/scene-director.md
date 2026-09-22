@@ -157,8 +157,16 @@ With finite footage you will re-use assets. Make it deliberate:
 ## Sound per movement
 
 State the music and ambience intent per movement, and where beds hand over.
-Water ambience must match the visible water — a gentle-creek bed under a
-waterfall is a mismatch, not a soundtrack.
+Ambience must match what is visible — a bed recorded for a quieter, smaller
+scene placed under a larger, louder one is a mismatch, not a soundtrack.
+
+For each slot, name which audio covers it: the clip's own native audio
+(`USE` / `USE_AFTER_TREATMENT`), a generated SFX source from `asset_manifest`,
+or nothing extra. Never plan an equivalent native and generated bed together.
+
+If the plan needs a sound the pool does not have, **send it back to `assets`**
+for a supplementary generation, priced against the approved budget — do not
+cast an unsuitable bed to fill the gap, and do not generate from this stage.
 
 ## Output
 

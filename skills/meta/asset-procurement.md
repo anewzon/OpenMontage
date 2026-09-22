@@ -243,7 +243,19 @@ SECTION:
 [project-specific]
 
 PURPOSE:
-[project-specific]
+[project-specific, one short human-readable line]
+
+SUBJECT:
+[the usable visual subject wanted, when the pipeline specifies it]
+
+CAMERA MOVEMENT:
+[the movement wanted, when the pipeline specifies it]
+
+USABLE DURATION NEEDED:
+[approximate usable seconds, when known]
+
+AVOID:
+[what would make this item wrong, when there is something to say]
 
 AI CHECK:
 Thumbnail:       PASS

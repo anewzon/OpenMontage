@@ -65,9 +65,19 @@ mirror, never the other way round.
 
 ## Hard constraints
 
-- **No paid providers.** Budget 0.00 USD. Do not call any generative video,
-  image, music or TTS provider. If material is missing, say what is missing and
-  stop — do not generate a substitute.
+- **Paid generation only inside the approved budget.** The default budget is
+  0.00 USD. Generated music (`suno_music`) and generated SFX (`elevenlabs_sfx`)
+  are the only paid providers in this pipeline's plan; they are priced at
+  `proposal`, approved by the operator as `approval.approved_budget_usd`, and
+  run at `assets` through `approved_budget_tracker(...).run_tool(...)` —
+  OpenMontage's `CostTracker` in cap mode. A call the budget cannot cover
+  **stops the run**; it is not a warning. No generative video, image or TTS
+  provider is called. If material is missing, say what is missing and stop —
+  do not generate an unplanned substitute.
+- **No silent provider substitution.** If a planned provider is unavailable,
+  report it, show the registry's alternatives with their cost and quality
+  differences, and get the operator's choice before switching — logged as a
+  `provider_selection` decision.
 - **Local assets only.** Never fetch stock from Pexels, Pixabay or Archive.org.
   Web access is for *research* and for finding Envato item pages, not for
   acquiring media.

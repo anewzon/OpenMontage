@@ -204,6 +204,21 @@ Two rules that follow:
 Where the provider exposes a **length filter**, use it — raising the minimum
 clip length is the single most effective way to keep the clip count sane.
 
+## Audio sourcing follows the approved plan
+
+Read `proposal_packet.metadata.paid_audio_plan` first.
+
+- **Music the plan generates is not procured here.** When the approved plan
+  generates music (the pipeline's preferred path is `suno_music`), this stage
+  sources no music at all; generation happens at `assets`, after the footage
+  exists, under the approved budget.
+- **SFX the plan generates is not procured here either.** Generated SFX
+  (`elevenlabs_sfx`) is derived at `assets` from the real footage. Clip audio
+  that arrives with licensed footage is assessed there too.
+- Everything below applies only to music or ambience this stage is actually
+  asked to acquire — stock music in `free_auto`, or a licensed item the plan
+  names.
+
 ## Music needs approval, not just retrieval
 
 **The stock tools return the first matching result. That is retrieval, not
@@ -306,6 +321,16 @@ in that channel's `BRAND.md` instead.
 Write `work/ASSET_LIST.md` in the format `meta/asset-procurement.md` defines —
 exact item links, one per entry, absolute destination folders, no internal
 filter complexity, no creative decisions left to the employee.
+
+For every clip in `licensed_manual`, fill in wherever it is reliably known: a
+short human-readable **purpose**, the exact item **title**, the exact
+**item-page URL**, the usable visual **subject** wanted, the **camera
+movement** wanted, the **resolution** wanted, the approximate **usable
+duration** needed, the absolute **folder** to save into, and any **avoid or
+reject** note. Footage goes into the project's canonical visual-assets folder
+(`visuals/`) — never a parallel folder named after how someone describes it.
+The employee should be able to work down the list without knowing anything
+about this pipeline.
 
 Also tell them to save licence receipts; anything without evidence gets flagged
 at `assets` and cannot ship.

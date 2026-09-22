@@ -194,14 +194,14 @@ Then classify:
 
 | Class | Meaning |
 |---|---|
-| `USE` | Clean, synchronised, matches the scene — may join the water/environment foundation |
+| `USE` | Clean, synchronised, matches the scene — may join the environmental foundation |
 | `USE_AFTER_TREATMENT` | Useful content behind a fixable problem (wind rumble, hiss, a little too hot) |
 | `REJECT` | Voices, traffic, handling noise, baked-in music, or sound that contradicts the picture |
 | `NO_AUDIO` | No audio stream present |
 
-Clean native river or waterfall sound is often **better** than a library bed,
-because it is genuinely the water on screen. Useful native birds or wind can
-feed the environmental layer.
+Clean native environmental sound is often **better** than a library or
+generated bed, because it is genuinely the place on screen. Useful native
+supporting sound can feed the environmental layer.
 
 **Measure, do not guess a level.** Record each usable clip's actual loudness so
 the Edit Director can set a real gain. **Never assign a blanket figure such as
@@ -210,6 +210,91 @@ the Edit Director can set a real gain. **Never assign a blanket figure such as
 Note the risk explicitly for anything classified `REJECT`: rejected audio must
 not reach the master, and the Edit and Compose Directors rely on this
 classification to keep it out.
+
+## Generated audio — music and SFX (paid, budget-capped)
+
+Generated audio is produced **here**, after the real footage has been analysed
+and its native audio classified — not at proposal, and not as a stage of its
+own. The approved concept says what the episode needs; the footage says what it
+already has. Generate only the difference.
+
+### Every paid call runs through the approved budget (binding)
+
+```python
+from lib.relaxation_policy import approved_budget_tracker
+from tools.tool_registry import registry
+
+tracker = approved_budget_tracker(proposal_packet, project_state_dir)  # cap mode
+result = tracker.run_tool(registry.get("suno_music"), inputs, operation="music: <purpose>")
+```
+
+`project_state_dir` is the directory holding this project's checkpoints, so
+`cost_log.json` sits beside them. `run_tool` estimates, reserves, executes and
+reconciles each call, and persists the log at every step.
+
+- **Never call a paid tool's `execute()` directly.** A call that bypasses the
+  tracker has no estimate, no reservation and no cap.
+- `approved_budget_tracker` refuses to exist without an approved proposal and
+  `approval.approved_budget_usd`. No approval, no paid call.
+- **`BudgetExceededError` means STOP.** Checkpoint what exists, report the
+  spend so far and what remains unmade, and wait for the operator. Do not
+  downgrade quality, switch provider or trim the plan on your own.
+- **`ApprovalRequiredError` means the tool was not in the approved estimate.**
+  That is a provider substitution; it needs the operator, not a workaround.
+- **A retry is a new paid call.** It goes through `run_tool` again and is
+  charged against the same budget. Stay within the approved retry allowance;
+  never loop on a failing generation.
+- A timed-out music generation is **already paid**: recover it with the tool's
+  `operation: "fetch"` and its `task_id`, which costs nothing, instead of
+  generating again.
+- Write every output with an explicit `output_path` under the project
+  workspace (`music/`, `sfx/`). Never let a tool fall back to a default path.
+
+### Music — candidates, not a first result
+
+One paid generation returns several candidates, and the tool downloads **all**
+of them (`data["candidates"]`). `output_path` holding candidate zero is a
+storage position, not a decision.
+
+**Evaluate every candidate** on the same automated screen the Procurement
+Director uses for music — metadata, then measured loudness, dynamic range and
+spectral balance, then the channel's prohibited-content list — and accept or
+reject each one with a recorded reason. Never pay for another generation to
+reach a candidate you already have.
+
+Accept against the programme the proposal planned
+(`metadata.paid_audio_plan.music`): the target is **accepted unique seconds**,
+not a track count.
+
+### SFX — derived from this episode, never from a list
+
+Decide which SFX this episode needs from, in order: the channel's `BRAND.md`,
+the approved concept and its movements, the **actual** visual assets and what
+is visible in them, and the native-audio classification above. Name each
+source by its purpose in *this* episode. There is no fixed set of sound
+categories, no category folder structure, and no default list — another
+channel using this pipeline will need entirely different sounds.
+
+**Native audio first.** Where a clip's own audio is `USE` or
+`USE_AFTER_TREATMENT` and genuinely matches what is visible, it covers that
+scene. Do not generate an equivalent layer just because a provider is
+available, and never plan an equivalent native and generated bed to play at
+the same time.
+
+**Long-form cost control.** Generate short **loopable** sources
+(`loop: true`) for continuous beds, one-shots for occasional detail, and a new
+matching source only where the picture genuinely changes. The Edit Director
+builds full-length stems from them with overlaps, fades and variation. The
+budget is spent on generated **source** seconds, never on final playback
+duration.
+
+### Record generated audio as canonical assets
+
+Each accepted file is an ordinary `asset_manifest` entry: `type: music` or
+`sfx`, `source_tool` (the tool name), `provider`, `model`, `prompt`,
+`cost_usd`, `duration_seconds` and a `generation_summary`. Rejected candidates
+are listed in `metadata.generated_audio` with their reasons, so the spend is
+explainable. Report the cost log's total against the approved budget.
 
 ## Reject, don't force
 

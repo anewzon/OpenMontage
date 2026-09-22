@@ -310,3 +310,82 @@ def test_channel_lists_its_own_search_queries() -> None:
     low = brand.lower()
     for term in ("piano", "ambient", "without vocals"):
         assert term in low, f"BRAND.md must carry the search preference: {term}"
+
+
+# --------------------------------------------------------------------------
+# Channel-level paid-audio policy (lives in BRAND.md, never in the pipeline)
+# --------------------------------------------------------------------------
+
+
+def _brand_flat_or_skip() -> str:
+    return re.sub(r"\s+", " ", _brand_or_skip()).lower()
+
+
+def _section(flat: str, heading: str) -> str:
+    start = flat.index(heading)
+    end = flat.find(" ### ", start + len(heading))
+    return flat[start:] if end == -1 else flat[start:end]
+
+
+def test_channel_records_a_budget_aware_long_form_music_policy() -> None:
+    """Short films get full unique music; long films do not scale linearly.
+
+    Deliberately not a fixed ratio: the numbers are a planning target, and
+    another channel is free to choose a different policy or no music.
+    """
+    brand = _brand_flat_or_skip()
+    policy = _section(brand, "### music programme budget")
+    assert re.search(r"1\s*[–-]\s*10 minutes", policy)
+    assert "essentially the whole film" in policy
+    assert re.search(r"2 hours", policy) and re.search(r"50\s*[–-]\s*60 minutes", policy)
+    assert "not linearly" in policy
+    assert "5-hour film does **not** request five hours" in policy
+    assert "planning target, not an artistic quota" in policy
+    assert "no short obvious loops" in policy
+    assert "never duplicate the complete mastered first hour" in policy
+    assert "before any money is spent" in policy
+
+
+def test_channel_prefers_generated_instrumental_music_and_screens_every_candidate() -> None:
+    brand = _brand_flat_or_skip()
+    source = _section(brand, "### music source")
+    assert "suno_music" in source and "instrumental: true" in source
+    assert "both are screened" in source
+    assert "negative_tags" in source
+
+
+def test_channel_states_its_principal_water_sfx_policy() -> None:
+    brand = _brand_flat_or_skip()
+    water = _section(brand, "### principal water sfx")
+    assert "primary environmental sfx layer" in water
+    native = water.index("native water audio from the actual envato footage")
+    generated = water.index("elevenlabs_sfx")
+    assert native < generated, "native water comes first; generated water is the fallback"
+    assert "do not use one identical flowing-water loop across the whole video" in water
+    assert "small pool of appropriate loopable water beds" in water
+    assert "not a fixed list" in water
+    assert "never by generating water audio minute-for-minute" in water
+    assert "reuse a water bed only where the visible environment stays compatible" in water
+    assert "never layer an equivalent generated water bed on top of already-good native" in water
+    assert "music is the reference layer" in water
+    assert "combined supporting sfx group stays quieter" in water
+
+
+def test_channel_music_is_the_reference_not_a_peer_of_the_water() -> None:
+    brand = _brand_flat_or_skip()
+    assert "it is a peer of the water" not in brand, (
+        "BRAND.md contradicted its own music-led balance table"
+    )
+
+
+def test_the_channel_water_rule_does_not_leak_into_the_pipeline() -> None:
+    texts = [p.read_text(encoding="utf-8") for p in RELAX.glob("*.md")]
+    texts.append(MANIFEST.read_text(encoding="utf-8"))
+    for path in ("lib/relaxation_policy.py", "tools/audio/elevenlabs_sfx.py",
+                 "tools/audio/suno_music.py"):
+        texts.append((ROOT / path).read_text(encoding="utf-8"))
+    for text in texts:
+        low = re.sub(r"\s+", " ", text).lower()
+        assert "principal water sfx" not in low
+        assert "flowing-water loop" not in low
+        assert "loopable water beds" not in low

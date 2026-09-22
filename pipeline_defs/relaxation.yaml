@@ -17,6 +17,11 @@ description: >
   separately from subject movement. Renders through FFmpeg; long productions
   use chunked, stream-copy assembly so a late failure resumes rather than
   restarting, and chunk boundaries never overwrite an approved transition.
+  Generated audio - music through suno_music and SFX through elevenlabs_sfx -
+  is produced in the assets stage from the approved concept and the real
+  footage, and only inside a paid budget the operator approved at proposal:
+  every paid call is estimated, reserved, executed and reconciled through
+  OpenMontage's CostTracker in cap mode, and stops at the cap.
 category: custom
 stability: beta
 default_checkpoint_policy: guided
@@ -48,6 +53,9 @@ metadata:
 orchestration:
   mode: executive-producer
   skill: pipelines/relaxation/executive-producer
+  # No paid spend without an operator-approved budget. The approved figure is
+  # proposal_packet.approval.approved_budget_usd, enforced by CostTracker in
+  # cap mode via lib.relaxation_policy.approved_budget_tracker().
   budget_default_usd: 0.00
   max_revisions_per_stage: 3
   max_send_backs: 2
@@ -130,9 +138,18 @@ stages:
       - Duration, visual progression, pacing and soundscape direction are concrete
       - Packaging hypothesis present but explicitly provisional
       - render_runtime presented with both alternatives and logged as a decision
-      - Cost estimate is 0.00 - local assets, local FFmpeg, no paid providers
+      - Paid audio estimated BEFORE any paid call, with plan_paid_audio, from the tools' own estimate_cost
+      - Music planned as a programme from the channel's policy, not minute-for-minute against the runtime
+      - Generated SFX planned in source seconds from the episode's needs, not the final runtime
+      - Retry and rejection allowance stated explicitly and included in the estimate
+      - Manually licensed footage recorded as external cost, excluded from API spend
+      - A paid provider that cannot be priced blocks the plan and names the setting to confirm
+      - Operator approved the concept AND the maximum paid budget
     success_criteria:
       - Schema-valid proposal_packet artifact
+      - cost_estimate produced by plan_paid_audio with every paid line priced
+      - metadata.paid_audio_plan records the music and SFX arithmetic
+      - approval.approved_budget_usd recorded whenever any paid line exists
       - production_plan.render_runtime set explicitly
       - "metadata.target_duration_seconds present and within [60, 18000]"
       - "metadata.opening present when the channel's BRAND.md requires an opening"
@@ -194,14 +211,20 @@ stages:
     produces:
       - asset_manifest
     required_tools: []
+    # suno_music and elevenlabs_sfx are paid. They run here - after the real
+    # footage is analysed - and only through approved_budget_tracker().run_tool.
     optional_tools:
       - video_analyzer
       - frame_sampler
       - audio_enhance
+      - suno_music
+      - elevenlabs_sfx
     tools_available:
       - video_analyzer
       - frame_sampler
       - audio_enhance
+      - suno_music
+      - elevenlabs_sfx
     checkpoint_required: true
     human_approval_default: false
     review_focus:
@@ -226,8 +249,19 @@ stages:
       - "Every clip's native audio classified USE / USE_AFTER_TREATMENT / REJECT / NO_AUDIO"
       - Usable native audio has a MEASURED level, never a blanket percentage
       - Music screened on metadata and measured content; evidence recorded without overclaiming
+      - "Paid generation only after proposal approval, via approved_budget_tracker().run_tool, never tool.execute directly"
+      - Every paid call estimated, reserved, executed and reconciled in cost_log.json
+      - Projected spend beyond the approved budget STOPS the run; it is never a warning
+      - Retries are new paid calls and are charged against the same budget
+      - Every candidate from a paid music generation evaluated; candidate zero not accepted blindly
+      - SFX derived from BRAND.md, the actual footage and the approved concept - no fixed category list
+      - Good native clip audio preferred over generating an equivalent SFX layer
+      - Long environmental beds generated as short loopable sources, not minute-for-minute
+      - No silent provider substitution; an unavailable provider is reported with registry alternatives
     success_criteria:
       - Schema-valid asset_manifest artifact
+      - "Generated audio assets carry provider, model, prompt and cost_usd"
+      - cost_log.json spend stays within approval.approved_budget_usd
       - "Every asset has id, type, path, source_tool, scene_id and duration_seconds"
       - "Per-asset analysis lives in metadata.asset_analysis[asset_id], not on the asset entry"
       - metadata.inventory_stats present including the reuse factor
@@ -323,7 +357,9 @@ stages:
       - Mix length DERIVED from the approved timeline, not a round number
       - Final fade lands inside the final duration
       - Rejected native audio contributes nothing; accepted native audio is range-aligned
-      - Native water not doubled with an equivalent library water bed
+      - Native environmental audio not doubled with an equivalent library or generated bed
+      - Music programme reprises accepted tracks at phrase boundaries; no short-track loop, no repeated sequence
+      - Generated SFX beds looped with crossfades and variation, never at one fixed interval
       - Music not ducked under ambience; no dialogue-mixing conventions applied
       - Long-form coverage counted honestly - overlapping files are not extra coverage
       - Grade is restrained normalisation, not styling

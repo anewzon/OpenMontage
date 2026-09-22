@@ -160,28 +160,29 @@ source analysis -> music + nature selection -> cleanup where required
 -> final mix -> loudness & true-peak control -> encoded-audio QC
 ```
 
-The film is a **two-part listening experience**: a music programme and a nature
-soundscape. Within nature, distinguish **principal water**, complementary water
-recordings, forest ambience, birds, wind and foliage, and occasional
-scene-specific detail.
+The channel's `BRAND.md` describes the listening experience — commonly a music
+programme and an environmental soundscape. Within the soundscape, distinguish
+the channel's **principal environmental bed**, complementary recordings of it,
+supporting ambience, and occasional scene-specific detail — named the way that
+channel names them, never from a list in this file.
 
-**Do not run every layer continuously.** Birds and wind are occasional by
-definition; a bird bed playing for an hour stops being a bird and becomes a
-texture the listener resents. Nature sound must stay related to what is
-visible.
+**Do not run every layer continuously.** Detail SFX are occasional by
+definition; a detail sound playing for an hour stops being a detail and becomes
+a texture the listener resents. Environmental sound must stay related to what
+is visible.
 
-**Do not duck music under the water.** Water is not narration. Ducking makes
-the music lurch every time the river swells — set a balance that works
-statically and leave it.
+**Do not duck music under the environmental bed.** Ambience is not narration.
+Ducking makes the music lurch every time the bed swells — set a balance that
+works statically and leave it.
 
 ## Audio layers
 
 Declare them in `metadata.audio_layers[]` — role, asset id, volume,
-`start_seconds`, `fade_in_seconds`, `fade_out_seconds`. Roles follow the
-channel brief: main music (A1), principal water ambience (A2), secondary
-environmental ambience (A3), detail SFX such as birds or wind (A4), occasional
-texture (A5). These are conceptual groups, not a requirement to use exactly
-five files or five mixer inputs.
+`start_seconds`, `fade_in_seconds`, `fade_out_seconds`. Roles and their names
+come from the channel's `BRAND.md` — typically a reference layer, a principal
+environmental bed, secondary ambience, occasional detail SFX and occasional
+texture. These are conceptual groups, not a requirement to use a fixed number
+of files or mixer inputs.
 
 ### Balance: from a stated relationship, via measured BUILT stems
 
@@ -230,8 +231,8 @@ Set the balance in this order:
    different sources arrive at different loudness, and the result inverts the
    hierarchy it was meant to set.
 
-4. **Group the supporting layers.** Forest, birds and wind share **one**
-   allowance between them. Giving each of them the group's full allowance makes
+4. **Group the supporting layers.** The layers the channel groups as
+   supporting share **one** allowance between them. Giving each of them the group's full allowance makes
    their combined output roughly 5 dB louder than intended, because three
    equal sources sum. `solve_balance` distributes a group allowance by power so
    the members **sum** to it.
@@ -288,10 +289,10 @@ belongs to; treat it if needed; give its entry and exit a fade; and set its
 level from the measured loudness the Asset Director recorded — **never a
 blanket percentage**.
 
-Where native water is used, **do not also run an equivalent library water bed
-underneath it.** Two recordings of the same river fight each other and produce
-a wide, phasey wash. Duck the library bed out under the native section, or omit
-it there.
+Where native environmental audio is used, **do not also run an equivalent
+library or generated bed underneath it.** Two recordings of the same place
+fight each other and produce a wide, phasey wash. Duck the other bed out under
+the native section, or omit it there.
 
 `REJECT` and `NO_AUDIO` clips contribute nothing to the mix.
 
@@ -303,8 +304,8 @@ bird that arrives once, not a loop.
 2–4 s *before* its first shot, or let the outgoing bed run past the cut. Do this
 with `start_seconds` and fades — **never** by trimming video to fake it.
 
-Match the water bed to the visible water, and change it when the water changes
-character — crossing over inside a shot, never on a cut.
+Match the environmental bed to what is visible, and change it when the scene
+changes character — crossing over inside a shot, never on a cut.
 
 ## Duration comes from the timeline (binding)
 
@@ -326,7 +327,7 @@ timeline is approved, **the audio and the video must agree exactly.**
 Plan coverage honestly before mixing:
 
 - total unique music available
-- total unique principal water available
+- total unique principal environmental bed available (native, library or generated source)
 - other nature recordings available
 - intended overlap
 - planned reuse
@@ -343,6 +344,45 @@ soundscape audibly restarts. Review every loop and crossfade.
 
 **Never repeat a complete mixed programme to reach a duration**, and do not
 hard-code a track count, loop interval or musical order for every upload.
+
+### The music programme: accepted tracks, reprised with intent
+
+Generated music is planned as a **programme**, not minute-for-minute: the
+proposal generated a pool of accepted unique music
+(`proposal_packet.metadata.paid_audio_plan.music`), and the runtime beyond it
+is covered by **reprising** accepted tracks. Build the programme so reprise is
+never audible as repetition:
+
+- **No obvious short-track looping.** A few-minute track does not play twenty
+  times.
+- **No mechanical order.** Accepted tracks do not return in the same sequence;
+  a track may come back later in a different position and context.
+- **Phrase boundaries, not timers.** Enter and leave a track at a musical
+  phrase boundary, with a crossfade shaped to the material.
+- **The soundscape keeps evolving underneath.** Environmental beds follow the
+  picture independently of the music, so a reprised track never lands on the
+  same soundscape it had the first time.
+- **Never duplicate the whole mastered programme** — reprise is placement of
+  accepted material, not a copy of the first half.
+
+Record the programme in `metadata.music_programme`: each placement's asset id,
+source in/out, timeline position, and whether it is a first play or a reprise.
+Where the pool genuinely cannot cover the runtime without audible repetition,
+say so and propose the smallest additional generation — priced and approved
+through the proposal budget — rather than looping.
+
+### Generated SFX beds: loopable sources, built into stems
+
+Generated SFX arrive as short sources (`loop: true` for beds, one-shots for
+detail). Build each full-length stem from them here:
+
+- overlap and crossfade successive loop passes; vary the in-point so the seam
+  never falls at one fixed interval;
+- alternate between compatible sources of the same bed where the pool allows;
+- change to a new matching source only where the picture changes;
+- place one-shots occasionally and irregularly, never on a grid.
+
+Then measure the **built** stem like any other (`measure_stem`).
 
 ## Build the mix
 

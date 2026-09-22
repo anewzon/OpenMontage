@@ -212,9 +212,9 @@ the **encoded** file; a WAV that met the ceiling can exceed it after AAC.
 | Area | Check |
 |---|---|
 | Music | No vocals or lyrics where the channel forbids them; mood and intensity appropriate; progression smooth |
-| Hierarchy | **Is the mix music-led?** Water audibly *supports* the music rather than matching or overpowering it; the supporting group is quiet. Verify against the channel's stated relationship with `BalancePlan.verify()`, checking the **group's** achieved offset, not only each layer's |
-| Nature | Audible, coherent water foundation; forest ambience soft; birds occasional and restrained; wind very subtle with no intrusive hiss or harsh gusts; no contaminated native audio; no two water beds contradicting each other |
-| Mix | Consistent gain; nothing masked; **no abrupt layer changes**; no overload, clipping or distortion; restrained dynamics; clean stereo and mono fold-down; music not ducked under the water |
+| Hierarchy | **Does the mix follow the channel's stated hierarchy?** For a music-led channel, the principal environmental bed audibly *supports* the music rather than matching or overpowering it; the supporting group is quiet. Verify against the channel's stated relationship with `BalancePlan.verify()`, checking the **group's** achieved offset, not only each layer's |
+| Environment | A coherent principal bed that matches the picture; supporting ambience at the level `BRAND.md` asks for; detail SFX occasional and restrained, with no intrusive hiss or harsh transients; no contaminated native audio; no two equivalent beds (native, library or generated) contradicting each other |
+| Mix | Consistent gain; nothing masked; **no abrupt layer changes**; no overload, clipping or distortion; restrained dynamics; clean stereo and mono fold-down; music not ducked under the environmental bed |
 | Continuity | Every music boundary, environmental crossover and reused-audio junction; the opening and the ending; **music and environmental audio continuous across picture transitions**; no gaps, no truncated fade |
 | Technical | Correct duration, sample rate, channels, integrated loudness, measured true peak, encoded audio, A/V sync at start, middle and end |
 | Consistency | `metadata.audio_layers[]` and `metadata.mix_balance` describe **the mix that was executed** — same duration, same gains. The second test recorded a 926.3 s timeline for an 864.03 s mix |
