@@ -8,16 +8,27 @@ inventory produces an unbuildable timeline.
 
 ## 1. Validate the project
 
-Confirm these exist under the project root: `brief.txt`, `visuals/`, `music/`,
-`sfx/`, `overlays/`, `licenses/`, `work/`, `output/`.
+The project is OpenMontage's native workspace, created by `init_project()`
+under `projects/<project_id>/`. Media lives in its canonical folders:
+
+| Folder | Holds |
+|---|---|
+| `assets/video/` | footage — licensed downloads, acquired stock, overlay clips |
+| `assets/audio/` | SFX and ambience — supplied or generated |
+| `assets/music/` | music — supplied or generated |
+| `licenses/` | licence receipts and evidence |
+| `work/`, `output/` | working files; the three operator deliverables |
+
+There is no second layout: do not create `visuals/`, `music/` or `sfx/` beside
+these.
 
 Read `proposal_packet` for the approved concept. Note the target duration — you will report usable footage
 against it.
 
 ## 2. Probe every file
 
-For every file in `visuals/`, `music/`, `sfx/`, `overlays/`, run ffprobe and
-record:
+For every file in `assets/video/`, `assets/audio/` and `assets/music/`, run
+ffprobe and record:
 
 **Video** — path, duration, width × height, fps, codec, pixel format, bitrate,
 rotation, whether it has an audio stream.
@@ -36,7 +47,7 @@ Record these as flags on the asset, and surface them to the operator:
 - Frame rate that is not 30 — note it; the edit director decides conform policy.
 - Visible watermark, burned-in logo, or timecode — reject, with reason.
 - People as a primary subject, cities, aggressive camera movement — reject by
-  default per BRAND.md, unless `brief.txt` overrides.
+  default per BRAND.md, unless the approved proposal overrides.
 - Heavy compression artefacts, rolling shutter, or exposure pumping — flag.
 
 ## 4. Find the usable sub-ranges
@@ -253,7 +264,8 @@ reconciles each call, and persists the log at every step.
   `operation: "fetch"` and its `task_id`, which costs nothing, instead of
   generating again.
 - Write every output with an explicit `output_path` under the project
-  workspace (`music/`, `sfx/`). Never let a tool fall back to a default path.
+  workspace (`assets/music/`, `assets/audio/`). Never let a tool fall back to
+  a default path.
 
 ### Music — candidates, not a first result
 

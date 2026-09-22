@@ -40,14 +40,19 @@ export const calculateRiverFlowOpeningMetadata: CalculateMetadataFunction<
   const seconds = props.durationSeconds ?? 8;
   let width = 1920;
   let height = 1080;
-  try {
-    if (props.videoSrc) {
+  if (props.videoSrc) {
+    // The canvas comes from the episode's own bed. A bed that cannot be read
+    // must fail the render: silently falling back to 1080p would put a 1080p
+    // opening in front of a 4K body.
+    try {
       const meta = await getVideoMetadata(resolveAsset(props.videoSrc));
       width = meta.width;
       height = meta.height;
+    } catch (err) {
+      throw new Error(
+        `RiverFlowOpening could not read its bed ${props.videoSrc}: ${String(err)}`
+      );
     }
-  } catch {
-    // Fall back to 1080p if the bed cannot be probed.
   }
   return { durationInFrames: Math.round(seconds * fps), fps, width, height };
 };

@@ -142,13 +142,19 @@ Read `edit_decisions.metadata.opening`. When `required: true`:
    short segment into `work/`.
 2. **Inspect the rendered frames.** Sample them with `frame_sampler` and look:
    confirm all three text roles are present and ranked as the channel's
-   `BRAND.md` asks, and that the bed is visibly moving water from this
-   episode's own footage.
-3. **Concatenate it** ahead of the body, with the same codec, resolution, fps
+   `BRAND.md` asks, and that the bed is the footage `BRAND.md` asks for, taken
+   from this episode's own pool.
+3. **Match the canvas — a mismatch is a blocker.** ffprobe the rendered opening
+   and the body: width, height, fps and pixel format must be identical, and
+   equal to the approved delivery canvas. An opening composition that could
+   not read its bed may fall back to a default canvas (for example 1080p under
+   a 4K body). **Never scale, pad or concatenate mismatched segments to get
+   past it** — stop and report the blocker with both probes.
+4. **Concatenate it** ahead of the body, with the same codec, resolution, fps
    and pixel format so the join is a stream copy.
-4. **Keep the approved audio continuous** across the join. The opening does
+5. **Keep the approved audio continuous** across the join. The opening does
    not get its own mix and is not silent.
-5. **Offset every audited transition position** by the opening's duration when
+6. **Offset every audited transition position** by the opening's duration when
    checking boundaries in the delivered file.
 
 **An opening the channel requires is never silently omitted.** If it cannot be

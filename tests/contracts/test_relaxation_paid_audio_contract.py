@@ -466,7 +466,7 @@ class TestPipelineWiring:
         for field in ("purpose", "title", "item-page url", "subject", "camera movement",
                       "resolution", "usable duration", "avoid"):
             assert field in low, f"ASSET_LIST guidance lost {field!r}"
-        assert "`visuals/`" in proc
+        assert "assets/video/" in proc and "`visuals/`" not in proc
         meta = (META / "asset-procurement.md").read_text(encoding="utf-8")
         assert "EMPLOYEE INSTRUCTIONS" in meta
         for field in ("SUBJECT:", "CAMERA MOVEMENT:", "USABLE DURATION NEEDED:", "AVOID:", "PUT IN:"):

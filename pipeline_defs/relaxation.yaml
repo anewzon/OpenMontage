@@ -435,6 +435,7 @@ stages:
       - Early creative screening used excerpts, not repeated full-film processing
       - "A BRAND-required opening was rendered, inspected and concatenated - never silently omitted"
       - A short Remotion opening is not a full-body runtime swap
+      - Opening canvas ffprobe-verified identical to the body (width, height, fps, pix_fmt); a mismatch is a blocker, never scaled past
       - Completed chunks preserved so a late failure resumes, never restarts
       - Audio-only corrections remuxed without re-encoding the video
     success_criteria:

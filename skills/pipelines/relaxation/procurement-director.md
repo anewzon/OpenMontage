@@ -327,8 +327,10 @@ short human-readable **purpose**, the exact item **title**, the exact
 **item-page URL**, the usable visual **subject** wanted, the **camera
 movement** wanted, the **resolution** wanted, the approximate **usable
 duration** needed, the absolute **folder** to save into, and any **avoid or
-reject** note. Footage goes into the project's canonical visual-assets folder
-(`visuals/`) — never a parallel folder named after how someone describes it.
+reject** note. Footage goes into the project's canonical footage folder,
+`projects/<project_id>/assets/video/` (the layout `init_project()` creates), and
+licence receipts into `projects/<project_id>/licenses/` — always written as
+absolute paths, never a parallel folder named after how someone describes it.
 The employee should be able to work down the list without knowing anything
 about this pipeline.
 

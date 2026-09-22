@@ -821,3 +821,52 @@ class TestFFmpegRuntime:
         compose = _flat(directors["compose-director"]).lower()
         assert "cpu `libx264` is the production path" in compose
         assert "not a blocker" in compose
+
+
+# ---------------------------------------------------------------------------
+# One workspace layout: the one init_project() creates
+# ---------------------------------------------------------------------------
+
+
+class TestCanonicalWorkspace:
+    """Footage goes where OpenMontage's own project layout puts it.
+
+    Both completed productions stored footage in `assets/video/`, while some
+    instructions still named a legacy `visuals/` folder from the retired
+    template. A download list pointing at the wrong folder costs a human the
+    download, so the Directors must name the folders `init_project()` creates.
+    """
+
+    def test_init_project_creates_the_folders_the_directors_name(self, tmp_path, directors):
+        from lib.checkpoint import init_project
+
+        project = init_project("channel_9999__video_9999", title="layout check",
+                               pipeline_type="relaxation", pipeline_dir=tmp_path)
+        for sub in ("assets/video", "assets/audio", "assets/music"):
+            assert (project / sub).is_dir()
+            assert f"`{sub}/`" in directors["asset-director"]
+        assert "assets/video/" in directors["procurement-director"]
+
+    def test_no_relaxation_director_names_a_legacy_media_folder(self, directors):
+        for name, text in directors.items():
+            for legacy in ("`visuals/`", "`music/`", "`sfx/`", "`overlays/`"):
+                if legacy in text:
+                    assert "do not create" in _flat(text).lower(), (
+                        f"{name}.md tells an agent to use legacy folder {legacy}"
+                    )
+
+
+class TestOpeningCanvasSafeguard:
+    def test_compose_blocks_a_mismatched_opening_canvas(self, manifest, directors):
+        compose = _flat(directors["compose-director"])
+        assert "Match the canvas — a mismatch is a blocker." in compose
+        assert "Never scale, pad or concatenate mismatched segments" in compose
+        stage = next(s for s in manifest["stages"] if s["name"] == "compose")
+        focus = " ".join(stage["review_focus"]).lower()
+        assert "a mismatch is a blocker" in focus
+
+    def test_opening_composition_fails_instead_of_falling_back(self):
+        src = (ROOT / "remotion-composer" / "src" / "RiverFlowOpening.tsx").read_text(
+            encoding="utf-8")
+        assert "Fall back to 1080p if the bed cannot be probed" not in src
+        assert "could not read its bed" in src and "throw new Error" in src
