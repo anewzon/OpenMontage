@@ -23,14 +23,21 @@ Contract verified against the live provider documentation on 2026-09-23:
 - tracks arrive under ``data.response.sunoData`` (older examples show
   ``data.response.data``; both are read)
 
-Pricing: sunoapi.org publishes the value of a credit (``$0.005``) but, as of
-the date above, does not publish how many credits a V6 generation consumes —
-that figure is only shown on the logged-in dashboard. So the per-generation
-credit count is an operator-confirmed setting (``SUNO_CREDITS_PER_GENERATION``,
-or a per-model ``SUNO_CREDITS_PER_GENERATION_<MODEL>``). Without it,
-``estimate_cost`` raises and ``execute`` refuses to submit: an unpriced paid call
-is never made. Actual spend is reconciled from the account's credit balance,
-read before and after the generation.
+Pricing: sunoapi.org publishes the value of a credit (``$0.005``) but not how
+many credits a generation consumes. That figure is therefore **measured**: V6
+was calibrated with one live generation (see `VERIFIED_CREDITS_PER_GENERATION`).
+Only calibrated models are priced - nothing is inferred from a sibling model -
+so ``V6_WILD``, ``V6_MINI`` and the deprecated models stay unpriced, and
+``execute`` refuses to submit an unpriced call, until each is verified.
+
+Every paid generation is reconciled from the account's credit balance, read
+before and after the call. When the measured charge differs from the known
+rate, the result carries ``pricing_mismatch`` and further paid generations of
+that model are refused until the operator resolves it.
+
+The calibration also showed that V6 treats ``duration`` as a target, not a
+limit: 10 s requested returned candidates of 33.5 s and 17.8 s. Plan on the
+measured candidate lengths, never the requested one.
 """
 
 from __future__ import annotations
@@ -66,26 +73,46 @@ DURATION_RANGE_SECONDS = (10, 360)
 # ---- Pricing (kept together so it is easy to update) ----------------------
 #: Published on sunoapi.org: "Each credit is valued at $0.005 USD."
 USD_PER_CREDIT = 0.005
-#: Operator-confirmed credits per generation request. Read from the sunoapi.org
-#: dashboard ("Credits per call", or "Credits Consumed" in Logs).
-CREDITS_ENV = "SUNO_CREDITS_PER_GENERATION"
+#: Credits one generation request consumes, measured live. Only models listed
+#: here are priced; a sibling model is never assumed to cost the same.
+#:
+#: V6 - one live generation, 2026-09-22T20:28Z (task db79ee16630b...):
+#: balance 1000 -> 988 credits, 10 s requested, 2 candidates returned.
+VERIFIED_CREDITS_PER_GENERATION: dict[str, float] = {"V6": 12.0}
+#: Optional emergency override per model (``SUNO_CREDITS_PER_GENERATION_V6=14``)
+#: for when the provider changes a price. Never required for a verified model.
+OVERRIDE_ENV_PREFIX = "SUNO_CREDITS_PER_GENERATION_"
+
+#: Models whose measured charge disagreed with the known rate in this process.
+#: Paid generation of these models is refused until the operator resolves it.
+#: (Across sessions, CostTracker persists the same block in cost_log.json.)
+_PRICING_MISMATCHES: dict[str, dict[str, Any]] = {}
 
 
 class SunoPricingUnconfirmed(ValueError):
-    """The per-generation credit cost has not been confirmed by the operator."""
+    """No verified per-generation credit cost exists for this model."""
 
 
-def credits_per_generation(model: str) -> float:
-    """Return the confirmed credits per generation for ``model``, or raise.
+class SunoPricingMismatch(SunoPricingUnconfirmed):
+    """The provider charged a different amount than the known rate."""
 
-    ``SUNO_CREDITS_PER_GENERATION_<MODEL>`` wins over the general
-    ``SUNO_CREDITS_PER_GENERATION``. Nothing is guessed: an unset or invalid
-    value raises `SunoPricingUnconfirmed`.
+
+def resolve_price(model: str) -> tuple[float, str]:
+    """(credits per generation, source) for ``model``, or raise.
+
+    An operator override wins, then the calibrated constant. Nothing else is
+    priced: an unverified model raises `SunoPricingUnconfirmed`, and a model
+    with an unresolved charge mismatch raises `SunoPricingMismatch`.
     """
-    for env_name in (f"{CREDITS_ENV}_{model}", CREDITS_ENV):
-        raw = os.environ.get(env_name, "").strip()
-        if not raw:
-            continue
+    if model in _PRICING_MISMATCHES:
+        raise SunoPricingMismatch(
+            f"Suno {model} pricing mismatch: {_PRICING_MISMATCHES[model]['message']} "
+            "Further paid generations are refused until the rate is corrected "
+            f"({OVERRIDE_ENV_PREFIX}{model}) and the mismatch is resolved."
+        )
+    env_name = f"{OVERRIDE_ENV_PREFIX}{model}"
+    raw = os.environ.get(env_name, "").strip()
+    if raw:
         try:
             value = float(raw)
         except ValueError as exc:
@@ -93,16 +120,44 @@ def credits_per_generation(model: str) -> float:
                 f"{env_name} must be a finite number greater than 0"
             ) from exc
         if not math.isfinite(value) or value <= 0:
-            raise SunoPricingUnconfirmed(
-                f"{env_name} must be a finite number greater than 0"
-            )
-        return value
+            raise SunoPricingUnconfirmed(f"{env_name} must be a finite number greater than 0")
+        return value, f"override:{env_name}"
+    if model in VERIFIED_CREDITS_PER_GENERATION:
+        return VERIFIED_CREDITS_PER_GENERATION[model], "verified_calibration"
     raise SunoPricingUnconfirmed(
-        f"Suno pricing for model {model!r} is not confirmed. sunoapi.org does not "
-        f"publish credits per {model} generation; read it from your sunoapi.org "
-        f"dashboard and set {CREDITS_ENV} (or {CREDITS_ENV}_{model}) in .env "
-        "before any paid generation."
+        f"Suno pricing for model {model!r} has not been verified. sunoapi.org does "
+        f"not publish credits per generation, and {model} is not inferred from "
+        "another model. Verify it with one calibrated generation, or set "
+        f"{env_name} from the sunoapi.org dashboard, before any paid generation."
     )
+
+
+def credits_per_generation(model: str) -> float:
+    """Verified credits per generation for ``model``, or raise."""
+    return resolve_price(model)[0]
+
+
+def resolve_pricing_mismatch(model: str) -> None:
+    """Operator acknowledgement: allow paid generation of ``model`` again."""
+    _PRICING_MISMATCHES.pop(model, None)
+
+
+def check_charge(model: str, expected: float, consumed: Optional[float]) -> dict[str, Any]:
+    """Compare a measured charge with the known rate; record a mismatch."""
+    if consumed is None:
+        return {"status": "unverified", "model": model, "expected_credits": expected,
+                "measured_credits": None,
+                "message": "the credit balance could not be measured around the call"}
+    if abs(consumed - expected) < 1e-9:
+        return {"status": "match", "model": model, "expected_credits": expected,
+                "measured_credits": consumed}
+    info = {
+        "status": "mismatch", "model": model, "expected_credits": expected,
+        "measured_credits": consumed,
+        "message": f"expected {expected:g} credits, the provider charged {consumed:g}.",
+    }
+    _PRICING_MISMATCHES[model] = info
+    return info
 
 
 class SunoProviderError(RuntimeError):
@@ -127,10 +182,9 @@ class SunoMusic(BaseTool):
 
     dependencies = ["env:SUNO_API_KEY"]
     install_instructions = (
-        "Set SUNO_API_KEY in .env (key from https://sunoapi.org/api-key), then "
-        "confirm the per-generation credit cost from your sunoapi.org dashboard "
-        f"and set {CREDITS_ENV} (optionally {CREDITS_ENV}_<MODEL>). Paid "
-        "generation is refused until that price is confirmed."
+        "Set SUNO_API_KEY in .env (key from https://sunoapi.org/api-key). V6 "
+        "pricing is built in (verified by calibration); other models stay "
+        "unpriced until each is verified."
     )
 
     agent_skills = ["music"]
@@ -305,25 +359,26 @@ class SunoMusic(BaseTool):
             "deprecated": list(DEPRECATED_MODELS),
             "default": DEFAULT_MODEL,
         }
-        info["pricing"] = self.pricing_status()
+        info["pricing"] = {m: self.pricing_status(m) for m in CURRENT_MODELS}
         return info
 
     def pricing_status(self, model: str = DEFAULT_MODEL) -> dict[str, Any]:
         """Whether a paid generation of ``model`` can be priced right now."""
         try:
-            credits = credits_per_generation(model)
+            credits, source = resolve_price(model)
         except SunoPricingUnconfirmed as exc:
             return {
                 "confirmed": False,
                 "model": model,
                 "usd_per_credit": USD_PER_CREDIT,
                 "credits_per_generation": None,
-                "operator_must_set": f"{CREDITS_ENV} (or {CREDITS_ENV}_{model})",
+                "mismatch": _PRICING_MISMATCHES.get(model),
                 "reason": str(exc),
             }
         return {
             "confirmed": True,
             "model": model,
+            "source": source,
             "usd_per_credit": USD_PER_CREDIT,
             "credits_per_generation": credits,
             "usd_per_generation": round(credits * USD_PER_CREDIT, 4),
@@ -394,6 +449,7 @@ class SunoMusic(BaseTool):
             payload = self._build_payload(inputs)
             self._require_output_path(inputs)
             estimated = self.estimate_cost(inputs)
+            expected_credits = credits_per_generation(model)
         except SunoPricingUnconfirmed as exc:
             return ToolResult(success=False, error=str(exc), data={"charge_status": "not_charged"})
         except ValueError as exc:
@@ -407,6 +463,7 @@ class SunoMusic(BaseTool):
             task_id = self._submit(payload, api_key)
         except SunoProviderError as exc:
             return self._failure(exc, api_key, model=model, estimated=estimated,
+                                 expected_credits=expected_credits,
                                  credits_before=credits_before, task_id=None, start=start)
 
         try:
@@ -418,6 +475,7 @@ class SunoMusic(BaseTool):
             candidates = self._download_candidates(tracks, inputs)
         except SunoProviderError as exc:
             return self._failure(exc, api_key, model=model, estimated=estimated,
+                                 expected_credits=expected_credits,
                                  credits_before=credits_before, task_id=task_id, start=start)
         except TimeoutError as exc:
             err = SunoProviderError(
@@ -426,16 +484,19 @@ class SunoMusic(BaseTool):
                 charge_status="charged",
             )
             return self._failure(err, api_key, model=model, estimated=estimated,
+                                 expected_credits=expected_credits,
                                  credits_before=credits_before, task_id=task_id, start=start)
 
         cost, basis, credits_after, consumed = self._actual_cost(
             api_key, credits_before, estimated)
-        return self._success(
+        result = self._success(
             inputs, model=model, task_id=task_id, candidates=candidates,
             cost=cost, cost_basis=basis, estimated=estimated,
             credits_before=credits_before, credits_after=credits_after,
             credits_consumed=consumed, start=start,
         )
+        self._attach_pricing_check(result, model, expected_credits, consumed)
+        return result
 
     def _fetch_existing(self, inputs: dict[str, Any], api_key: str) -> ToolResult:
         task_id = inputs.get("task_id")
@@ -801,7 +862,8 @@ class SunoMusic(BaseTool):
         return estimated, "confirmed_estimate", after, None
 
     def _failure(self, exc: SunoProviderError, api_key: str, *, model: str,
-                 estimated: float, credits_before: Optional[float],
+                 estimated: float, expected_credits: float,
+                 credits_before: Optional[float],
                  task_id: Optional[str], start: float) -> ToolResult:
         charge_status = exc.charge_status
         if charge_status == "not_charged":
@@ -811,7 +873,7 @@ class SunoMusic(BaseTool):
             if basis == "measured_credit_delta":
                 charge_status = "charged" if consumed and consumed > 0 else "not_charged"
             # Otherwise an unknown outcome is costed at the estimate, never at 0.
-        return ToolResult(
+        result = ToolResult(
             success=False,
             error=self._redact(f"Suno generation failed: {exc}", api_key),
             data={
@@ -831,6 +893,20 @@ class SunoMusic(BaseTool):
             duration_seconds=round(time.time() - start, 2),
             model=f"suno/{model}",
         )
+        if consumed:  # a charge was measured - hold it to the known rate too
+            self._attach_pricing_check(result, model, expected_credits, consumed)
+        return result
+
+    @staticmethod
+    def _attach_pricing_check(result: ToolResult, model: str, expected: float,
+                              consumed: Optional[float]) -> None:
+        check = check_charge(model, expected, consumed)
+        result.data["pricing_check"] = check
+        if check["status"] == "mismatch":
+            result.data["pricing_mismatch"] = check
+            note = (f"PRICING MISMATCH for Suno {model}: {check['message']} Further "
+                    f"paid {model} generations are blocked until this is resolved.")
+            result.error = f"{result.error} | {note}" if result.error else note
 
     def _success(self, inputs: dict[str, Any], *, model: str, task_id: str,
                  candidates: list[dict[str, Any]], cost: float, cost_basis: str,

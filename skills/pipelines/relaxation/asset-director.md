@@ -244,6 +244,11 @@ reconciles each call, and persists the log at every step.
 - **A retry is a new paid call.** It goes through `run_tool` again and is
   charged against the same budget. Stay within the approved retry allowance;
   never loop on a failing generation.
+- **A pricing mismatch means STOP too.** When a paid result carries
+  `pricing_mismatch` — the provider charged something other than the known
+  rate — the tracker refuses further calls to that tool. Report the expected
+  and measured charge and wait; only the operator corrects the rate and calls
+  `resolve_pricing_mismatch()`.
 - A timed-out music generation is **already paid**: recover it with the tool's
   `operation: "fetch"` and its `task_id`, which costs nothing, instead of
   generating again.

@@ -1031,10 +1031,10 @@ Gen-3 Alpha Turbo and Gen-4 Aleph were removed from the Runway API on
 3. Navigate to the dashboard and copy your API key
 4. Add credits (1 credit = $0.005 USD)
 5. Add to `.env`: `SUNO_API_KEY=your-key-here`
-6. Confirm how many credits one generation costs on your dashboard and add
-   `SUNO_CREDITS_PER_GENERATION=<credits>` — `suno_music` refuses paid
-   generation until this is set, because sunoapi.org does not publish the V6
-   per-generation cost.
+6. Nothing else is required for `V6`: its price (12 credits = $0.06 per
+   generation) was verified with a live calibration and is built in. `V6_WILD`
+   and `V6_MINI` are refused until their price is verified or set with
+   `SUNO_CREDITS_PER_GENERATION_<MODEL>`.
 
 #### Pricing
 
@@ -1046,7 +1046,7 @@ Gen-3 Alpha Turbo and Gen-4 Aleph were removed from the Runway API on
 | Pro | $10/mo | 2,500/mo | Commercial license |
 | Premier | $30/mo | 10,000/mo | Commercial license |
 
-**API (via sunoapi.org):** Pay-as-you-go, 1 credit = $0.005. Each generation returns 2 candidate tracks; `suno_music` downloads both. Credits per generation are not published for V6 — confirm them from your dashboard (see step 6). `suno_music` with `operation: "credits"` reads the remaining balance at no cost.
+**API (via sunoapi.org):** Pay-as-you-go, 1 credit = $0.005. Each generation returns 2 candidate tracks; `suno_music` downloads both. Credits per generation are not published; V6 was measured at 12 credits ($0.06). Every generation is re-measured from the credit balance, and a charge that differs from the known rate blocks further paid calls until resolved. `suno_music` with `operation: "credits"` reads the remaining balance at no cost.
 
 ---
 

@@ -170,6 +170,39 @@ class TestCostTrackerLifecycle:
             tracker.run_tool(tool, {})
         assert tool.calls == 0
 
+    def test_a_reported_pricing_mismatch_blocks_later_sessions(self, tmp_path):
+        tracker = _cap_tracker(tmp_path, 5.0)
+
+        class OffRate(FakePaidTool):
+            def execute(self, inputs):
+                self.calls += 1
+                return ToolResult(success=True, cost_usd=0.08, data={"pricing_mismatch": {
+                    "message": "expected 12 credits, the provider charged 16."}})
+
+        first = OffRate(price=0.06)
+        tracker.run_tool(first, {})
+        assert tracker.entries[-1]["actual_usd"] == 0.08
+
+        resumed = CostTracker(cost_log_path=tmp_path / "cost_log.json", mode=BudgetMode.CAP,
+                              single_action_approval_usd=float("inf"))
+        with pytest.raises(ApprovalRequiredError) as exc:
+            resumed.run_tool(FakePaidTool(price=0.06), {})
+        assert "Pricing mismatch" in str(exc.value)
+        validate_artifact("cost_log", json.loads((tmp_path / "cost_log.json").read_text()))
+
+        resumed.resolve_pricing_mismatch("fake_paid")
+        assert resumed.run_tool(FakePaidTool(price=0.06), {}).success
+
+    def test_the_approved_budget_tracker_does_not_clear_a_mismatch(self, tmp_path):
+        seed = CostTracker(cost_log_path=tmp_path / "cost_log.json")
+        seed.record_pricing_mismatch("suno_music", "expected 12 credits, charged 16.")
+        tracker = approved_budget_tracker(_packet(budget=1.0), tmp_path)
+        rogue = FakePaidTool(price=0.06)
+        rogue.name = "suno_music"
+        with pytest.raises(ApprovalRequiredError):
+            tracker.run_tool(rogue, {})
+        assert rogue.calls == 0
+
     def test_an_exception_mid_call_is_accounted_at_the_estimate(self, tmp_path):
         tracker = _cap_tracker(tmp_path, 5.0)
 
@@ -280,18 +313,37 @@ def _sfx(**over) -> dict:
     return {**base, **over}
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def suno_priced(monkeypatch):
-    monkeypatch.setenv("SUNO_CREDITS_PER_GENERATION", "12")
+    """V6 is priced by calibration; no override and no leftover mismatch."""
+    from tools.audio import suno_music
+
+    for model in ("V6", "V6_WILD", "V6_MINI"):
+        monkeypatch.delenv(f"SUNO_CREDITS_PER_GENERATION_{model}", raising=False)
+    suno_music._PRICING_MISMATCHES.clear()
+    yield
+    suno_music._PRICING_MISMATCHES.clear()
 
 
 class TestProposalEstimate:
-    def test_unconfirmed_music_pricing_blocks_the_plan(self, monkeypatch):
-        monkeypatch.delenv("SUNO_CREDITS_PER_GENERATION", raising=False)
-        monkeypatch.delenv("SUNO_CREDITS_PER_GENERATION_V6", raising=False)
+    @pytest.mark.parametrize("model", ["V6_WILD", "V6_MINI"])
+    def test_unverified_music_pricing_blocks_the_plan(self, model):
+        with pytest.raises(PaidCostUnavailable) as exc:
+            plan_paid_audio(target_duration_seconds=120,
+                            music=_music(tool_inputs={"model": model, "custom_mode": True}))
+        assert f"SUNO_CREDITS_PER_GENERATION_{model}" in str(exc.value)
+
+    def test_v6_plans_without_any_price_setting(self):
+        plan = plan_paid_audio(target_duration_seconds=120, music=_music())
+        assert plan["metadata"]["music"]["usd_per_request"] == 0.06
+
+    def test_a_recorded_mismatch_blocks_the_plan(self):
+        from tools.audio import suno_music
+
+        suno_music.check_charge("V6", 12.0, 15.0)
         with pytest.raises(PaidCostUnavailable) as exc:
             plan_paid_audio(target_duration_seconds=120, music=_music())
-        assert "SUNO_CREDITS_PER_GENERATION" in str(exc.value)
+        assert "pricing mismatch" in str(exc.value).lower()
 
     def test_estimate_is_schema_valid_for_the_proposal_packet(self, suno_priced):
         plan = plan_paid_audio(target_duration_seconds=120, music=_music(), sfx=_sfx(),
@@ -445,7 +497,8 @@ class TestBudgetRulesAreGated:
         focus = _focus(manifest, "assets")
         for phrase in ("approved_budget_tracker().run_tool", "stops the run",
                        "retries are new paid calls", "candidate zero not accepted blindly",
-                       "no silent provider substitution", "cost_log.json"):
+                       "no silent provider substitution", "cost_log.json",
+                       "pricing mismatch halts further paid calls"):
             assert phrase in focus, phrase
 
     def test_no_director_still_claims_production_is_free(self, directors):
@@ -460,6 +513,7 @@ class TestBudgetRulesAreGated:
         assert "Never call a paid tool's `execute()` directly" in asset
         assert "BudgetExceededError` means STOP" in asset
         assert "A retry is a new paid call" in asset
+        assert "A pricing mismatch means STOP too." in asset
 
     def test_proposal_director_uses_the_existing_schema_fields(self, directors):
         proposal = _flat(directors["proposal-director"])

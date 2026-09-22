@@ -57,6 +57,9 @@ class CostTracker:
         self.cost_log_path = cost_log_path
         self.entries: list[dict[str, Any]] = []
         self._approved_tools: set[str] = set()
+        #: tool -> details. A tool whose provider charged something other than
+        #: its known rate may not reserve again until this is resolved.
+        self._pricing_mismatches: dict[str, str] = {}
 
         if cost_log_path and cost_log_path.exists():
             self._load()
@@ -132,6 +135,14 @@ class CostTracker:
         entry = self._find(entry_id)
         estimated = entry["estimated_usd"]
 
+        # A provider that charged off its known rate cannot be estimated safely.
+        if entry["tool"] in self._pricing_mismatches and self.mode != BudgetMode.OBSERVE:
+            raise ApprovalRequiredError(
+                f"Pricing mismatch recorded for {entry['tool']!r}: "
+                f"{self._pricing_mismatches[entry['tool']]} Correct the rate and call "
+                "resolve_pricing_mismatch() before any further paid use."
+            )
+
         # Check single-action approval threshold
         if estimated > self.single_action_approval_usd:
             if self.mode != BudgetMode.OBSERVE:
@@ -168,6 +179,16 @@ class CostTracker:
     def approve_tool(self, tool: str) -> None:
         """Mark a tool as approved for paid operations."""
         self._approved_tools.add(tool)
+        self._save()
+
+    def record_pricing_mismatch(self, tool: str, details: str) -> None:
+        """Block further paid reservations for ``tool`` until resolved."""
+        self._pricing_mismatches[tool] = details
+        self._save()
+
+    def resolve_pricing_mismatch(self, tool: str) -> None:
+        """Operator acknowledgement that ``tool``'s rate has been corrected."""
+        self._pricing_mismatches.pop(tool, None)
         self._save()
 
     def reconcile(self, entry_id: str, actual_usd: float, success: bool = True) -> None:
@@ -225,6 +246,12 @@ class CostTracker:
         if not isinstance(actual, (int, float)):
             actual = estimated
         self.reconcile(entry_id, float(actual), success=bool(getattr(result, "success", False)))
+        # A tool that reports its provider charged off the known rate is
+        # blocked from further paid calls, across sessions, until resolved.
+        mismatch = (getattr(result, "data", None) or {}).get("pricing_mismatch")
+        if mismatch:
+            message = mismatch.get("message") if isinstance(mismatch, dict) else str(mismatch)
+            self.record_pricing_mismatch(tool.name, str(message))
         return result
 
     # ---- Reference-driven estimation ----
@@ -543,7 +570,10 @@ class CostTracker:
             "budget_spent_usd": round(self.budget_spent_usd, 4),
             "entries": self.entries,
             # Under metadata: the cost_log schema allows no other top-level key.
-            "metadata": {"approved_tools": sorted(self._approved_tools)},
+            "metadata": {
+                "approved_tools": sorted(self._approved_tools),
+                "pricing_mismatches": dict(self._pricing_mismatches),
+            },
         }
         self.cost_log_path.parent.mkdir(parents=True, exist_ok=True)
         with open(self.cost_log_path, "w") as f:
@@ -557,6 +587,9 @@ class CostTracker:
         self._approved_tools = set(
             (data.get("metadata") or {}).get("approved_tools")
             or data.get("approved_tools", [])  # logs written before the move
+        )
+        self._pricing_mismatches = dict(
+            (data.get("metadata") or {}).get("pricing_mismatches") or {}
         )
 
     # ---- Helpers ----

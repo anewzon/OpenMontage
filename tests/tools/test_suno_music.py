@@ -94,11 +94,21 @@ def tool() -> SunoMusic:
     return t
 
 
+@pytest.fixture(autouse=True)
+def clean_pricing(monkeypatch):
+    """No test inherits a price override or a recorded mismatch."""
+    for model in CURRENT_MODELS + DEPRECATED_MODELS:
+        monkeypatch.delenv(f"SUNO_CREDITS_PER_GENERATION_{model}", raising=False)
+    monkeypatch.delenv("SUNO_CREDITS_PER_GENERATION", raising=False)
+    suno_module._PRICING_MISMATCHES.clear()
+    yield
+    suno_module._PRICING_MISMATCHES.clear()
+
+
 @pytest.fixture
 def priced(monkeypatch):
+    """A configured key. V6 needs no price setting: it is calibrated."""
     monkeypatch.setenv("SUNO_API_KEY", KEY)
-    monkeypatch.setenv("SUNO_CREDITS_PER_GENERATION", "12")
-    monkeypatch.delenv("SUNO_CREDITS_PER_GENERATION_V6", raising=False)
 
 
 def _instrumental(tmp_path, **extra) -> dict[str, Any]:
@@ -227,42 +237,52 @@ def test_duration_bounds_follow_the_provider(tool, tmp_path):
 # ---- pricing ----------------------------------------------------------------
 
 
-def test_cost_is_refused_until_the_operator_confirms_it(monkeypatch, tool):
-    monkeypatch.delenv("SUNO_CREDITS_PER_GENERATION", raising=False)
-    monkeypatch.delenv("SUNO_CREDITS_PER_GENERATION_V6", raising=False)
+def test_v6_is_priced_from_the_live_calibration_without_any_setting(tool):
+    assert suno_module.VERIFIED_CREDITS_PER_GENERATION == {"V6": 12.0}
+    assert suno_module.USD_PER_CREDIT == 0.005
+    assert tool.estimate_cost({"prompt": "x"}) == 0.06
+    assert tool.estimate_cost({"prompt": "x", "model": "V6"}) == 0.06
+    assert tool.estimate_cost({"prompt": "x", "operation": "credits"}) == 0.0
+    status = tool.pricing_status("V6")
+    assert status["confirmed"] is True and status["source"] == "verified_calibration"
+
+
+@pytest.mark.parametrize("model", ["V6_WILD", "V6_MINI", *DEPRECATED_MODELS])
+def test_unverified_models_are_not_inferred_from_v6(tool, model):
     with pytest.raises(SunoPricingUnconfirmed) as exc:
-        tool.estimate_cost({"prompt": "x"})
-    assert "SUNO_CREDITS_PER_GENERATION" in str(exc.value)
-    assert tool.pricing_status()["confirmed"] is False
+        tool.estimate_cost({"prompt": "x", "model": model})
+    assert "not inferred from another model" in str(exc.value)
+    assert f"SUNO_CREDITS_PER_GENERATION_{model}" in str(exc.value)
+    assert tool.pricing_status(model)["confirmed"] is False
 
 
-def test_unpriced_generation_never_reaches_the_provider(monkeypatch, tool, tmp_path):
-    monkeypatch.setenv("SUNO_API_KEY", KEY)
-    monkeypatch.delenv("SUNO_CREDITS_PER_GENERATION", raising=False)
-    monkeypatch.delenv("SUNO_CREDITS_PER_GENERATION_V6", raising=False)
+def test_unpriced_generation_never_reaches_the_provider(priced, tool, tmp_path):
     fake = FakeSuno()
-    result = _run(tool, _instrumental(tmp_path), fake)
+    result = _run(tool, _instrumental(tmp_path, model="V6_MINI"), fake)
     assert result.success is False
     assert fake.posts == [] and fake.gets == []
     assert result.cost_usd == 0.0
-    dry = tool.dry_run(_instrumental(tmp_path))
-    assert dry["would_execute"] is False and "SUNO_CREDITS_PER_GENERATION" in dry["blocker"]
+    dry = tool.dry_run(_instrumental(tmp_path, model="V6_WILD"))
+    assert dry["would_execute"] is False and "V6_WILD" in dry["blocker"]
 
 
-def test_cost_uses_the_confirmed_credit_count_and_published_credit_value(priced, tool):
-    assert suno_module.USD_PER_CREDIT == 0.005
-    assert tool.estimate_cost({"prompt": "x"}) == 0.06
-    assert tool.estimate_cost({"prompt": "x", "operation": "credits"}) == 0.0
+def test_the_old_general_setting_no_longer_prices_anything(monkeypatch, tool):
+    monkeypatch.setenv("SUNO_CREDITS_PER_GENERATION", "99")
+    assert tool.estimate_cost({"prompt": "x", "model": "V6"}) == 0.06
+    with pytest.raises(SunoPricingUnconfirmed):
+        tool.estimate_cost({"prompt": "x", "model": "V6_MINI"})
 
 
-def test_per_model_price_wins(monkeypatch, priced, tool):
+def test_per_model_override_is_an_optional_emergency_setting(monkeypatch, tool):
+    monkeypatch.setenv("SUNO_CREDITS_PER_GENERATION_V6", "14")
+    assert tool.estimate_cost({"prompt": "x", "model": "V6"}) == 0.07
+    assert tool.pricing_status("V6")["source"] == "override:SUNO_CREDITS_PER_GENERATION_V6"
     monkeypatch.setenv("SUNO_CREDITS_PER_GENERATION_V6_MINI", "6")
     assert tool.estimate_cost({"prompt": "x", "model": "V6_MINI"}) == 0.03
-    assert tool.estimate_cost({"prompt": "x", "model": "V6"}) == 0.06
 
 
-def test_invalid_price_is_rejected(monkeypatch, tool):
-    monkeypatch.setenv("SUNO_CREDITS_PER_GENERATION", "abc")
+def test_invalid_override_is_rejected(monkeypatch, tool):
+    monkeypatch.setenv("SUNO_CREDITS_PER_GENERATION_V6", "abc")
     with pytest.raises(SunoPricingUnconfirmed):
         tool.estimate_cost({"prompt": "x"})
 
@@ -302,10 +322,47 @@ def test_track_index_chooses_which_candidate_lands_on_output_path(priced, tool, 
 
 
 def test_actual_cost_comes_from_the_credit_balance(priced, tool, tmp_path):
-    result = _run(tool, _instrumental(tmp_path), FakeSuno(credits=(100, 90)))
-    assert result.data["credits_consumed"] == 10
-    assert result.cost_usd == 0.05
+    result = _run(tool, _instrumental(tmp_path), FakeSuno(credits=(100, 88)))
+    assert result.data["credits_consumed"] == 12
+    assert result.cost_usd == 0.06
     assert result.data["cost_basis"] == "measured_credit_delta"
+    assert result.data["pricing_check"]["status"] == "match"
+    assert "pricing_mismatch" not in result.data and result.error is None
+
+
+@pytest.mark.parametrize("after", [90, 80])
+def test_an_off_rate_charge_is_surfaced_and_blocks_further_generation(priced, tool, tmp_path, after):
+    result = _run(tool, _instrumental(tmp_path), FakeSuno(credits=(100, after)))
+    assert result.success is True, "the paid candidates are still delivered"
+    mismatch = result.data["pricing_mismatch"]
+    assert mismatch["expected_credits"] == 12 and mismatch["measured_credits"] == 100 - after
+    assert "PRICING MISMATCH" in result.error
+    assert result.cost_usd == round((100 - after) * 0.005, 4), "the real charge is what is recorded"
+
+    blocked = FakeSuno()
+    again = _run(tool, _instrumental(tmp_path), blocked)
+    assert again.success is False and "pricing mismatch" in again.error.lower()
+    assert blocked.posts == [], "no paid call proceeds blindly after a mismatch"
+    assert tool.pricing_status("V6")["mismatch"]["measured_credits"] == 100 - after
+
+    suno_module.resolve_pricing_mismatch("V6")
+    assert _run(tool, _instrumental(tmp_path), FakeSuno()).success is True
+
+
+def test_a_failed_task_that_charged_off_rate_is_also_a_mismatch(priced, tool, tmp_path):
+    fake = FakeSuno(statuses=("GENERATE_AUDIO_FAILED",), credits=(100, 95))
+    result = _run(tool, _instrumental(tmp_path), fake)
+    assert result.success is False
+    assert result.data["pricing_mismatch"]["measured_credits"] == 5
+    with pytest.raises(suno_module.SunoPricingMismatch):
+        tool.estimate_cost({"prompt": "x"})
+
+
+def test_an_unmeasurable_charge_is_reported_unverified_not_blocked(priced, tool, tmp_path):
+    result = _run(tool, _instrumental(tmp_path), FakeSuno(credits=()))
+    assert result.data["pricing_check"]["status"] == "unverified"
+    assert "pricing_mismatch" not in result.data
+    assert tool.estimate_cost({"prompt": "x"}) == 0.06
 
 
 def test_falls_back_to_the_confirmed_estimate_without_a_balance(priced, tool, tmp_path):

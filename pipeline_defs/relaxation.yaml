@@ -253,6 +253,7 @@ stages:
       - Every paid call estimated, reserved, executed and reconciled in cost_log.json
       - Projected spend beyond the approved budget STOPS the run; it is never a warning
       - Retries are new paid calls and are charged against the same budget
+      - A provider pricing mismatch halts further paid calls until the operator resolves it
       - Every candidate from a paid music generation evaluated; candidate zero not accepted blindly
       - SFX derived from BRAND.md, the actual footage and the approved concept - no fixed category list
       - Good native clip audio preferred over generating an equivalent SFX layer
