@@ -68,13 +68,13 @@ from __future__ import annotations
 import json
 import logging
 import math
-import os
 import re
-import shutil
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional
+
+from lib.ffmpeg_runtime import FFmpegNotAvailable, ffmpeg_path
 
 logger = logging.getLogger(__name__)
 
@@ -203,18 +203,11 @@ def distribute_group(group_target_lufs: float, weights: Mapping[str, float]) -> 
 
 
 def _ffmpeg() -> str:
-    pinned = Path(r"D:\VidQwik AI\Tools\ffmpeg-7.1.1-full_build\bin\ffmpeg.exe")
-    if pinned.is_file():
-        return str(pinned)
-    env = os.environ.get("OPENMONTAGE_FFMPEG_DIR")
-    if env:
-        candidate = Path(env) / ("ffmpeg.exe" if os.name == "nt" else "ffmpeg")
-        if candidate.is_file():
-            return str(candidate)
-    found = shutil.which("ffmpeg")
-    if not found:
-        raise StemBalanceError("ffmpeg not found for stem measurement")
-    return found
+    """Resolve `ffmpeg` through PATH, as OpenMontage's tools do."""
+    try:
+        return ffmpeg_path()
+    except FFmpegNotAvailable as exc:
+        raise StemBalanceError(str(exc)) from exc
 
 
 @dataclass

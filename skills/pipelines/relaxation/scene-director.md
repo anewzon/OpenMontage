@@ -15,7 +15,7 @@ The unit of this stage is the **journey**, not the shot. A run of individually
 attractive clips is not a scene plan — the second test produced exactly that,
 and it read as a stock playlist.
 
-A River Flow scene plan must demonstrate:
+A relaxation scene plan must demonstrate:
 
 - a **coherent progression** through the selected natural environment;
 - **changes of perspective and scale**;
@@ -36,22 +36,51 @@ footage or a changed concept. Building a timeline you already know is
 repetitive and leaving the reviewer to discover it is the failure this
 paragraph exists to stop.
 
-## Build slots
+## Build slots — the schema-valid shape (binding)
 
-For each movement, an ordered list of slots. Every slot names:
+`scene_plan.scenes[]` is a **closed** schema object: `asset_id`, `shot_scale`,
+`camera_motion`, `subject_motion`, `season`, `light` and `hold` are **not**
+canonical scene fields and adding them fails validation.
 
-- `asset_id` and the **specific usable in/out range** from the inventory
-- `shot_scale` (wide / medium / detail)
-- `camera_motion` and `camera_direction` — carried from the asset manifest's
-  **measured** values, not re-guessed here
-- `subject_motion` — recorded separately; moving water is not camera movement
-- `season` and `light` — carried from the manifest
-- target hold in seconds
-- why it sits here, at this point, in this movement
+So the plan has two halves, and they must agree:
+
+**1. `scenes[]` — canonical OpenMontage scene entries.** Use the real fields:
+`id`, `type` (`broll` for footage), `description`, `start_seconds`,
+`end_seconds`, `shot_intent`, `transition_in`, `transition_out`,
+`required_assets[]`, and `shot_language` where its enums genuinely fit.
+
+**2. `metadata.relaxation_slots[]` — the source mapping**, one entry per scene:
+
+```yaml
+metadata:
+  relaxation_slots:
+    - scene_id: M1_001            # must match a scenes[] id
+      asset_id: pexels_4318716    # must exist in asset_manifest
+      usable_in_seconds: 0.6
+      usable_out_seconds: 18.6
+      shot_scale: wide
+      camera_motion: tracking     # MEASURED, carried from the manifest
+      camera_direction: down
+      subject_motion: strong      # recorded separately from camera motion
+      season: indeterminate
+      weather: overcast
+      light: "diffuse overcast"
+      target_hold_seconds: 18.0
+      editorial_reason: "opens on the pool's only unambiguous moving-camera
+        shot; leading with movement establishes the journey"
+```
+
+**Never produce two contradictory plans.** `scenes[]` timings and the slots'
+holds describe the same timeline; if they disagree, the plan is wrong. The Edit
+Director reads `metadata.relaxation_slots[]` explicitly for source ranges and
+measured motion, and `scenes[]` for structure.
+
+Carry `camera_motion`, `camera_direction` and `subject_motion` **from the asset
+manifest's measured values** — do not re-measure and do not re-guess them here.
 
 Every slot must resolve to a real asset id **and a real usable in/out range**
-present in `asset_manifest`. A slot pointing at a range nobody inspected is not
-a plan.
+present in `asset_manifest.metadata.asset_analysis`. A slot pointing at a range
+nobody inspected is not a plan.
 
 ## Vary deliberately
 
@@ -59,10 +88,10 @@ Within a movement, vary shot scale and motion. Avoid wide → wide → wide, and
 equally avoid a mechanical wide/medium/detail rotation — a visible cycle is as
 template-like as no variation at all.
 
-**Avoid long runs of similar stationary close-ups, even when every clip has
-moving water.** Water motion is not shot variety: three locked-off
-rocky-stream close-ups in a row are one idea stated three times, however
-different the rocks are.
+**Avoid long runs of similar stationary close-ups, even when the subject
+itself is moving.** Subject motion is not shot variety: three locked-off
+close-ups of the same kind of thing in a row are one idea stated three times,
+however different the details are.
 
 ## Screen the plan before anyone renders
 
@@ -84,10 +113,32 @@ expensive after a long encode.
 named.** "Add more variety" is not actionable; "slots M2_004 through M2_009 are
 all static detail shots of the same creek" is.
 
-Holds for relaxation run long (commonly 15–55 s), longer than conventional
-editing. Derive each from the **strength and motion of the shot**: a rich slow
-wide can hold far longer than a busy detail. A movement's opening and hero
-shots hold longest; transitional shots shortest.
+### Holds come from the shot and the runtime, never from a band
+
+Derive every hold from:
+
+- the **total approved runtime** — a 60-second piece cannot spend 40 seconds on
+  one shot, a 5-hour film can hold far longer than any conventional edit;
+- the shot's **visual strength** and how much it rewards looking;
+- its **camera movement** — a slow move can carry a long hold, a busy locked
+  detail cannot;
+- its **role** — establishing, advancing, hero, breathing room;
+- the channel's `BRAND.md` and this episode's concept.
+
+Long-form relaxation holds often land somewhere around 15–55 s, **but that is
+an observation about long-form, not a rule and not a floor.** Do not apply it
+to a short production: a 60-second piece with 15-second minimum holds is four
+shots by arithmetic, not by judgement. A movement's opening and hero shots hold
+longest; transitional shots shortest.
+
+**Avoid mechanical duration patterns.** A visible repeating rhythm is as much a
+failure as no variation at all.
+
+### Scale the plan to the duration
+
+Shot count, movement count and reuse strategy all follow the approved runtime.
+Do not carry a long-form structure onto a short piece, or a short piece's
+simplicity onto a multi-hour film.
 
 ## Handle re-use honestly
 

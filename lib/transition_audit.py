@@ -32,13 +32,13 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
-import shutil
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional, Sequence
+
+from lib.ffmpeg_runtime import FFmpegNotAvailable, ffmpeg_path
 
 logger = logging.getLogger(__name__)
 
@@ -323,18 +323,11 @@ def transition_discipline(
 
 
 def _ffmpeg() -> str:
-    pinned = Path(r"D:\VidQwik AI\Tools\ffmpeg-7.1.1-full_build\bin\ffmpeg.exe")
-    if pinned.is_file():
-        return str(pinned)
-    env = os.environ.get("OPENMONTAGE_FFMPEG_DIR")
-    if env:
-        candidate = Path(env) / ("ffmpeg.exe" if os.name == "nt" else "ffmpeg")
-        if candidate.is_file():
-            return str(candidate)
-    found = shutil.which("ffmpeg")
-    if not found:
-        raise TransitionAuditError("ffmpeg not found for boundary inspection")
-    return found
+    """Resolve `ffmpeg` through PATH, as OpenMontage's tools do."""
+    try:
+        return ffmpeg_path()
+    except FFmpegNotAvailable as exc:
+        raise TransitionAuditError(str(exc)) from exc
 
 
 def frame_difference_profile(

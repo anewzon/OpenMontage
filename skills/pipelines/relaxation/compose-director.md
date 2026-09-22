@@ -12,9 +12,12 @@ choose**: `video_compose` otherwise falls back to legacy behaviour and silently
 picks Remotion, which `AGENT_GUIDE.md` treats as a governance violation.
 
 - **`ffmpeg`** — the expected value, and the only runtime that renders a
-  60–180 minute 4K body in a sane time. Everything below assumes it.
-- **`remotion`** — permitted only for a short declared overlay or end card,
-  rendered separately and concatenated. Never for the full body.
+  multi-hour body in a sane time. Everything below assumes it.
+- **`remotion`** — permitted for a **short declared segment** — a channel
+  opening or an end card — rendered separately and concatenated. Never for the
+  full body. Rendering an approved opening this way while the body stays on
+  `ffmpeg` is the documented pattern and **is not** a silent runtime swap; the
+  governance rule it must not break is swapping the *body's* runtime.
 - **`hyperframes`** — not used by this pipeline: an HTML/CSS/GSAP motion
   graphics runtime with nothing a silent nature montage needs. If
   `edit_decisions` arrives with it set, **stop and surface that** rather than
@@ -37,25 +40,42 @@ custom compositor.
 ## Before the long encode
 
 Confirm the timeline was approved. Render **one chunk first**, ffprobe it, and
-*look at it*. Never launch a two-hour encode on an unverified configuration.
+*look at it*. Never launch a long encode on an unverified configuration.
+
+## FFmpeg comes from PATH
+
+`ffmpeg` and `ffprobe` are ordinary OpenMontage command dependencies —
+`cmd:ffmpeg`, `cmd:ffprobe`, resolved with `shutil.which` in
+`tools/base_tool.py::check_dependencies`. There is **no project-local FFmpeg
+and no override variable.** If a binary is missing, that is an environment
+problem to fix by installing FFmpeg on the system, never by pinning a copy
+inside the project: a pinned copy lets these helpers use a different binary
+from the one the tools use, and lets tests pass against a runtime production
+does not have.
+
+The additive helpers follow the same contract via `lib/ffmpeg_runtime.py`.
 
 ## Encode settings
 
-Default on this machine:
+The delivery canvas and frame rate come from the **channel's `BRAND.md`** and
+the approved proposal — the figures below show the shape of the command, not a
+house resolution.
 
 ```
 -c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p
--r 30 -s 3840x2160
+-r <approved fps> -s <approved canvas>
 -c:a aac -b:a 320k -ar 48000 -ac 2
 -movflags +faststart
 ```
 
-Benchmarked at ~2.4× realtime at 4K30, so a 120-minute render is roughly 50
-minutes. NVENC exists only via
-`D:\VidQwik AI\Tools\ffmpeg-7.1.1-full_build\bin\ffmpeg.exe` — the system
-FFmpeg 9.0.1 needs NVIDIA driver ≥ 610.00 and this machine has 591.86 — and
-measured only ~15% faster with ~70% larger files. Use it for drafts, not the
-deliverable. If you switch, tell the operator and log the decision.
+**CPU `libx264` is the production path.** Do not make a production depend on
+GPU encoding. Where NVENC is available it is a draft-speed convenience only;
+where it is unavailable, that is an optional acceleration limitation and not a
+blocker. If you switch encoders, tell the operator and log the decision.
+
+Measure encode throughput on the machine you are actually rendering on rather
+than quoting a remembered figure — it changes with canvas, FFmpeg build and
+hardware, and a stale benchmark in a plan is worse than no benchmark.
 
 ## Chunked render and assembly
 
@@ -114,9 +134,54 @@ when computing chunk durations and cut offsets:
 `lib.transition_audit.timeline_duration` is the arithmetic. A chunk whose
 length is the raw sum of its holds will not line up.
 
+## Render the channel opening (binding)
+
+Read `edit_decisions.metadata.opening`. When `required: true`:
+
+1. **Render it** — the named composition on its declared runtime, as its own
+   short segment into `work/`.
+2. **Inspect the rendered frames.** Sample them with `frame_sampler` and look:
+   confirm all three text roles are present and ranked as the channel's
+   `BRAND.md` asks, and that the bed is visibly moving water from this
+   episode's own footage.
+3. **Concatenate it** ahead of the body, with the same codec, resolution, fps
+   and pixel format so the join is a stream copy.
+4. **Keep the approved audio continuous** across the join. The opening does
+   not get its own mix and is not silent.
+5. **Offset every audited transition position** by the opening's duration when
+   checking boundaries in the delivered file.
+
+**An opening the channel requires is never silently omitted.** If it cannot be
+rendered, that is a blocker to raise — the stage fails rather than shipping a
+film missing its channel identity.
+
+When `required: false`, record that the channel asked for none. An absent
+`metadata.opening` is not the same as "not required": treat a missing contract
+as an upstream defect and send it back.
+
+## Where QC goes (binding)
+
+The canonical `render_report` schema sets `additionalProperties: false` and
+declares **no top-level `qc` field**. Writing `render_report.qc` fails
+validation.
+
+All relaxation QC goes under the open `metadata` object:
+
+```
+render_report.metadata.qc.technical     resolution, fps, pix_fmt, codecs,
+                                        streams, duration, decode, sync
+render_report.metadata.qc.audio         loudness, true peak, balance, fade
+render_report.metadata.qc.transitions   the rendered-boundary audit
+render_report.metadata.qc.editorial     repetition, motion variety, coherence
+render_report.metadata.qc.brand         BRAND.md consistency, opening present
+```
+
+Keep the canonical top-level fields — `version`, `outputs[]`,
+`verification_notes[]`, `warnings[]` — schema-valid and populated.
+
 ## QC — technical
 
-Probe the finished file and record in `render_report.qc`:
+Probe the finished file and record in `render_report.metadata.qc.technical`:
 
 - resolution and 30 fps, `yuv420p`, H.264
 - audio AAC, 48 000 Hz, 2 channels
@@ -182,7 +247,7 @@ obs = audit_rendered_boundaries(
     only_at=chunk_boundaries + sampled_interior_joins)
 
 assert not unexpected_cuts(obs)              # the Test 2 defect
-report["qc"]["transitions"] = audit_report(obs, violations, discipline)
+report["metadata"]["qc"]["transitions"] = audit_report(obs, violations, discipline)
 ```
 
 Check, and record:
@@ -194,9 +259,14 @@ Check, and record:
 - editorial suitability between the actual adjacent shots;
 - consistent output format across chunk joins.
 
-Then **look at the rendered boundary frames** for duplicated frames, black
-flashes, abrupt exposure changes, broken overlaps, frozen frames and
-unexpected hard cuts. A boundary that measures correctly can still look wrong.
+Then **look at the rendered boundary frames** — extract them with
+`frame_sampler` and inspect for duplicated frames, black flashes, abrupt
+exposure changes, broken overlaps, frozen frames and unexpected hard cuts.
+`visual_qa` is available for structured frame assessment where it helps. A
+boundary that measures correctly can still look wrong.
+
+**Inspect every chunk boundary and every approved critical transition.** Sample
+the rest.
 
 ## QC — editorial
 
@@ -221,14 +291,35 @@ Sample across the finished video and answer honestly:
 - **does this feel like a stock-footage playlist rather than a directed film?**
 
 **Use lightweight analysis and representative excerpts for early screening.**
-Do not re-process the entire long-form film for every minor creative check.
-Full-file technical QC still runs when a final video is produced.
+Do not re-process the entire film for every minor creative check, and do not
+add per-frame AI analysis simply because a production is long.
+
+The split that keeps a multi-hour production practical:
+
+| Check | Scope |
+|---|---|
+| Decode integrity, probe, loudness, true peak, duration, sync | **Full file**, once, on the final encode |
+| Chunk boundaries and approved critical transitions | **Every one** |
+| Editorial: motion variety, repetition, coherence, ASMR dominance | **Representative excerpts** |
+| Frame inspection | Boundaries plus a sample per movement |
+
+Reuse what earlier stages already measured — the asset manifest's motion and
+season data is authoritative and does not need re-deriving here. Where a
+finding needs the source, sample it; do not re-analyse the whole pool.
+
+For audio-only corrections, **remux** with `-c:v copy`; never re-encode the
+video to fix a mix.
 
 ## QC — brand
 
 Consistent with the channel's `BRAND.md`, and still distinct from the channel's
 previous uploads. A video that satisfies the brand by being identical to the
 last one has failed this check.
+
+**If `BRAND.md` requires an opening, verify it is actually in the delivered
+file** — the right duration, the three text roles present and correctly ranked,
+moving-water bed, audio continuous into the body. **A missing required opening
+is a stage failure**, recorded in `metadata.qc.brand`, not a warning.
 
 This is editorial quality, **not** an attempt to influence monetisation systems,
 and must never be described that way.

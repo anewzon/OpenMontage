@@ -280,6 +280,24 @@ Stage director skills teach the agent HOW to execute each pipeline stage. Each s
 | Compose Director | `pipelines/localization-dub/compose-director.md` | `compose` | Per-locale rendering, subtitle-fit checks, output labeling |
 | Publish Director | `pipelines/localization-dub/publish-director.md` | `publish` | Locale packaging, metadata precision, QA-note retention |
 
+### Relaxation Pipeline (`pipelines/relaxation/`) — v2.0
+
+Long-calm nature video at any approved duration from 60 seconds to 5 hours.
+Channel identity lives in the calling channel's `BRAND.md`, never in these
+skills.
+
+| Skill | File | Stage | Key Capabilities |
+|-------|------|-------|-----------------|
+| **Executive Producer** | `pipelines/relaxation/executive-producer.md` | `all` | **8-stage serial orchestration, duration-scaled editorial, human gates, BRAND.md resolution** |
+| Research Director | `pipelines/relaxation/research-director.md` | `research` | Web-grounded landscape, views-per-hour comparison, original angles |
+| Proposal Director | `pipelines/relaxation/proposal-director.md` | `proposal` | Concept selection, duration validation (60–18000 s), opening contract, render-runtime lock |
+| Procurement Director | `pipelines/relaxation/procurement-director.md` | `procurement` | `licensed_manual` and `free_auto` sourcing, measured movement screening, human pool gate |
+| Asset Director | `pipelines/relaxation/asset-director.md` | `assets` | Per-source analysis once, camera vs subject motion, usable ranges, native-audio classification |
+| Scene Director | `pipelines/relaxation/scene-director.md` | `scene_plan` | Visual progression, scale and motion variety, season coherence, pre-render screening |
+| Edit Director | `pipelines/relaxation/edit-director.md` | `edit` | Transition discipline, overlap arithmetic, music-led balance from built stems, chunk plan |
+| Compose Director | `pipelines/relaxation/compose-director.md` | `compose` | Chunked resumable FFmpeg render, rendered-boundary audit, channel opening, technical/audio/editorial QC |
+| Publish Director | `pipelines/relaxation/publish-director.md` | `publish` | Frame-derived thumbnail, publish package, export only |
+
 ## Meta Skills
 
 Cross-cutting skills that apply to all pipelines:

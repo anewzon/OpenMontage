@@ -325,10 +325,16 @@ class TestScenePlanningRejectsAnUnsupportedConcept:
     def test_scene_director_forbids_runs_of_static_close_ups(
         self, directors: dict[str, str]
     ) -> None:
+        """Subject motion is not shot variety.
+
+        Stated channel-neutrally: another relaxation channel's subject is rain
+        or a fireplace, and the rule is the same for it.
+        """
         low = directors["scene-director"].lower()
-        assert "even when every clip has" in low, (
-            "moving water must not be accepted as shot variety"
+        assert "even when the subject" in low, (
+            "subject motion must not be accepted as shot variety"
         )
+        assert "subject motion is not shot variety" in low
 
     def test_scene_plan_gate_screens_before_the_render(self, manifest: dict) -> None:
         focus = _focus(manifest, "scene_plan")

@@ -5,6 +5,54 @@ Produces: `edit_decisions`, plus the mixed soundscape and graded clips on disk
 Turn the approved `scene_plan` into a concrete timeline, an authored
 soundscape, and a coherent grade. Rendering happens next stage.
 
+## Read the scene plan's two halves
+
+`scene_plan.scenes[]` carries the canonical structure. **The source mapping —
+asset ids, usable in/out ranges, measured camera and subject motion, scale,
+season and light — lives in `scene_plan.metadata.relaxation_slots[]`.** Read it
+explicitly; the canonical scene entries do not carry those fields, because the
+schema forbids them.
+
+Match each cut to its slot by `scene_id`. If a slot has no matching scene, or a
+scene has no slot, the plan is inconsistent — send it back rather than guessing.
+
+## Carry the channel's opening (binding)
+
+Read `proposal_packet.metadata.opening`. When `required: true`, copy the
+approved contract into **`edit_decisions.metadata.opening`** and write this
+episode's actual copy into it — the welcome message and episode line are
+written fresh per episode; the brand signature is constant.
+
+```yaml
+metadata:
+  opening:
+    required: true
+    composition: <the channel's composition id>
+    runtime: remotion
+    duration_seconds: 8.0
+    bed_asset_id: <an asset id from THIS episode's own footage>
+    text:
+      brand_signature: <the channel's constant signature, from BRAND.md>
+      welcome_message: <written fresh for this episode>
+      episode_line: <written fresh for this episode>
+```
+
+Every value above comes from the calling channel's `BRAND.md` and this
+episode. None of them belongs in this Director.
+
+Three consequences, all binding:
+
+- **The timeline duration includes the opening.** Body + opening = the approved
+  duration.
+- **The audio plan covers the opening.** Music and ambience run across the join
+  into the body; the opening is not silent and does not get its own mix.
+- **Transition timing accounts for it.** Every transition position the Compose
+  Director audits is offset by the opening's duration in the delivered file.
+
+An opening the channel requires is **not optional** and a short runtime does not
+excuse it. If it cannot be produced, that is a blocker to raise, not a thing to
+drop quietly.
+
 ## Cuts
 
 One cut per slot: `id`, `source` (asset id), `in_seconds`, `out_seconds`,
@@ -25,7 +73,8 @@ chain; treat any overlay as a separate declared segment.
   durations chosen from the actual shots.
 - **longer transition** — reserved for a deliberate major change of movement.
 - **fade through black** — only for a genuine narrative or structural break,
-  never as a recurring decorative device. Perhaps once or twice in two hours.
+  never as a recurring decorative device. Rare at any length: perhaps once or
+  twice across a long film, and often not at all in a short one.
 
 Never alternate transitions on a fixed cycle to manufacture variety. A dissolve
 between unrelated shots reads as a mistake. **When in doubt, cut.**
@@ -336,9 +385,28 @@ have gone too far. Write graded paths back into `asset_manifest`.
 
 ## Chunk plan
 
-Any timeline over 20 minutes needs `metadata.chunk_plan[]` — **a list**, one
-entry per chunk, each with chunk id, start and end seconds, and cut ids. Target
-10–20 minutes.
+**Chunking is a rendering decision, scaled to the runtime — never a creative
+one.**
+
+| Timeline | Policy |
+|---|---|
+| ≤ 20 minutes | Chunking **optional**. Use it only when render complexity requires it, and say why. Do not chunk a 60-second piece. |
+| > 20 minutes | `metadata.chunk_plan[]` **required**, so a late failure resumes instead of restarting. |
+| multi-hour | Chunks of roughly 10–20 minutes are practical. That interval is a convenience, not a rule — the boundary positions come from the transition map. |
+
+The threshold comes from the manifest, not from memory:
+
+```python
+from lib.relaxation_policy import chunking_required
+chunking_required(timeline_seconds)   # True above metadata.chunking.threshold_seconds
+```
+
+**A 5-hour production must be resumable.** A failure at hour four must not
+restart from zero: every completed chunk stays on disk and the run resumes from
+the first missing one.
+
+`metadata.chunk_plan[]` is **a list**, one entry per chunk, each with chunk id,
+start and end seconds, and cut ids.
 
 The second test wrote `{"enabled": true, "chunk_seconds": 240, "reason": ...}`
 instead: a policy, not a plan. Nothing downstream could check it, so the

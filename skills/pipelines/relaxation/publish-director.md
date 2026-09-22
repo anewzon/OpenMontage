@@ -57,11 +57,16 @@ nature relaxation, calming river`. Then about three relevant hashtags.
 costs nothing, and matches what the viewer gets — and it needs no paid provider
 to ship today.
 
-Sample candidate frames across the video, pick the strongest composition, then
-enhance *restrainedly* with the existing tools — exposure and contrast, the
-same philosophy as the grade, not a different look. Crop if it strengthens the
-composition. Export JPEG at the video's resolution (or 1920×1080), high
-quality, and confirm it reads back.
+Use the native **`frame_sampler`** tool to extract candidate frames across the
+finished video — not an ad-hoc extraction — then look at them and pick the
+strongest composition. Enhance *restrainedly* with the existing tools —
+exposure and contrast, the same philosophy as the grade, not a different look.
+Crop if it strengthens the composition. Export JPEG at the video's delivery
+resolution, high quality, and confirm it reads back.
+
+Scale the sampling to the runtime: a handful of candidates across a 60-second
+piece, a wider spread across a multi-hour film. Sampling every minute of a
+5-hour video to choose one thumbnail is wasted work.
 
 Prefer: strong water subject · clean composition · cinematic natural appearance
 · minimal clutter · no misleading imagery · little or no text unless research

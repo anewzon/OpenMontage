@@ -1,18 +1,22 @@
 name: relaxation
 version: "2.0"
 description: >
-  Long-form (60-180 min) cinematic relaxation pipeline for LOCAL,
-  operator-supplied licensed footage, music and ambience. Suits rivers,
-  forests, waterfalls, ocean, rain, nature relaxation, meditation and sleep
-  scenery, and comparable long-form calm formats. Channel-specific identity
-  (subject priorities, look, voice) lives in that channel's BRAND.md, never
-  in this pipeline. Research is web-grounded like the explainer pipeline;
-  procurement is a human gate because the footage is licensed stock that a
-  person must buy. Everything after that inverts the documentary-montage
-  order: local media is analysed FIRST and the edit is cast from what the
-  footage actually contains rather than from search queries. Renders through
-  FFmpeg with chunked, stream-copy assembly so a failure at minute 110 does
-  not restart the job.
+  Cinematic relaxation pipeline for any approved duration from 60 seconds to
+  5 hours. Suits rivers, forests, waterfalls, ocean, rain, fireplace, night
+  nature, meditation and sleep scenery, and comparable calm formats.
+  Channel-specific identity - subject priorities, look, audio balance,
+  opening and delivery canvas - lives in that channel's BRAND.md, never in
+  this pipeline. Research is web-grounded like the explainer pipeline.
+  Procurement supports two sourcing modes chosen per project from
+  proposal_packet.metadata.sourcing: licensed_manual, where a person buys and
+  downloads the footage, and free_auto, where permitted free stock is acquired
+  through OpenMontage's own provider tools. Both keep a human approval gate.
+  Everything after that inverts the documentary-montage order: media is
+  analysed FIRST and the edit is cast from what the footage actually contains
+  rather than from search queries. Camera movement is measured and recorded
+  separately from subject movement. Renders through FFmpeg; long productions
+  use chunked, stream-copy assembly so a late failure resumes rather than
+  restarting, and chunk boundaries never overwrite an approved transition.
 category: custom
 stability: beta
 default_checkpoint_policy: guided
@@ -20,13 +24,40 @@ default_checkpoint_policy: guided
 reference_input:
   supported: true
 
+# Duration contract. The pipeline is duration-agnostic between these bounds;
+# a channel or a brief narrows it, this manifest does not. Editorial scale
+# (movements, shot count, holds, music, ambience, sourcing, QC sampling,
+# chunking) follows the approved duration rather than a fixed template.
+metadata:
+  duration:
+    min_seconds: 60
+    max_seconds: 18000          # 5 hours
+    note: >
+      Validated at the proposal stage. A request outside the range is
+      surfaced, never silently shortened or stretched.
+  chunking:
+    threshold_seconds: 1200     # 20 minutes
+    note: >
+      At or below the threshold, chunking is optional and used only when
+      render complexity requires it. Above it, metadata.chunk_plan[] is
+      required so a late failure resumes instead of restarting. For
+      multi-hour work, chunks of roughly 10-20 minutes are practical, but
+      that interval is a rendering convenience and never an editorial rule -
+      every boundary must still fall on a transition-safe position.
+
 orchestration:
   mode: executive-producer
   skill: pipelines/relaxation/executive-producer
   budget_default_usd: 0.00
   max_revisions_per_stage: 3
   max_send_backs: 2
-  max_wall_time_minutes: 600
+  # Advisory budget the Executive Producer reads; nothing in the codebase
+  # enforces it as a wall clock, and native checkpoints make a production
+  # resumable across sessions. Raised so it cannot read as a reason to refuse
+  # or truncate a legitimate 5-hour production: 5 hours of delivered runtime
+  # plus analysis, mixing, encoding and QC does not fit in 600 minutes on
+  # CPU encoding.
+  max_wall_time_minutes: 2880
 
 extensions:
   custom_scripts: true
@@ -42,6 +73,7 @@ required_skills:
   - pipelines/relaxation/asset-director
   - pipelines/relaxation/scene-director
   - pipelines/relaxation/edit-director
+  - pipelines/relaxation/compose-director
   - pipelines/relaxation/publish-director
   - meta/asset-procurement
   - meta/audio-mastering
@@ -86,6 +118,12 @@ stages:
     checkpoint_required: true
     human_approval_default: true
     review_focus:
+      - "Duration validated: 60 <= target_duration_seconds <= 18000"
+      - A duration outside the range is surfaced, not silently clamped
+      - The operator's requested duration is not shortened or stretched silently
+      - Editorial scale suits the duration; no fixed structure forced onto it
+      - "Channel opening requirement read from BRAND.md and recorded in metadata.opening"
+      - Opening duration counted inside the approved total duration
       - Concept is original and specific, not a competitor video reproduced
       - Concept sits inside the channel's BRAND.md
       - Movement structure is invented for this concept, not a reused skeleton
@@ -96,6 +134,8 @@ stages:
     success_criteria:
       - Schema-valid proposal_packet artifact
       - production_plan.render_runtime set explicitly
+      - "metadata.target_duration_seconds present and within [60, 18000]"
+      - "metadata.opening present when the channel's BRAND.md requires an opening"
       - decision_log contains a render_runtime_selection entry naming all options
       - Operator approved the selected concept
 
@@ -105,11 +145,26 @@ stages:
     required_artifacts_in:
       - proposal_packet
     produces: []
-    tools_available: []
+    # free_auto acquires through these native provider tools. In
+    # licensed_manual they stay unused: that mode produces a shopping list and
+    # stops for a person to license and download. No paid stock is ever
+    # downloaded automatically.
+    tools_available:
+      - direct_clip_search
+      - pexels_video
+      - pixabay_video
+      - pixabay_music
+    optional_tools:
+      - direct_clip_search
+      - pexels_video
+      - pixabay_video
+      - pixabay_music
     checkpoint_required: true
     human_approval_default: true
     review_focus:
       - Sourcing mode read from proposal_packet.metadata.sourcing, not assumed
+      - "licensed_manual: no automated paid-stock downloading"
+      - Sourcing quantity scaled to the approved duration, not a fixed count
       - Requests derive from the approved concept, not a generic shopping list
       - Every request states media type, purpose, preferred spec and destination
       - "licensed_manual: item URLs verified, or precise search instructions instead; no fabricated URLs"
@@ -141,9 +196,11 @@ stages:
     required_tools: []
     optional_tools:
       - video_analyzer
+      - frame_sampler
       - audio_enhance
     tools_available:
       - video_analyzer
+      - frame_sampler
       - audio_enhance
     checkpoint_required: true
     human_approval_default: false
@@ -171,7 +228,8 @@ stages:
       - Music screened on metadata and measured content; evidence recorded without overclaiming
     success_criteria:
       - Schema-valid asset_manifest artifact
-      - Every asset has path, type, duration and a provenance note
+      - "Every asset has id, type, path, source_tool, scene_id and duration_seconds"
+      - "Per-asset analysis lives in metadata.asset_analysis[asset_id], not on the asset entry"
       - metadata.inventory_stats present including the reuse factor
       - Every accepted video asset carries a measured camera_motion value
       - Every accepted video asset carries a subject_motion value recorded separately
@@ -208,9 +266,12 @@ stages:
       - Repetition screening performed BEFORE the render, with specific slots named
     success_criteria:
       - Schema-valid scene_plan artifact
+      - "scenes[] carries only canonical fields; relaxation detail lives in metadata.relaxation_slots[]"
+      - "Every metadata.relaxation_slots[] entry maps to a scenes[] id"
       - Every slot resolves to an asset id present in asset_manifest
       - Every slot's in/out range exists in that asset's usable ranges
       - Sum of slot holds within 10% of the approved duration
+      - Shot count and hold lengths scale with the approved duration
       - Pre-render repetition and coherence screening recorded with numbers
 
   # 6 - timeline, sound design and grade
@@ -266,7 +327,10 @@ stages:
       - Music not ducked under ambience; no dialogue-mixing conventions applied
       - Long-form coverage counted honestly - overlapping files are not extra coverage
       - Grade is restrained normalisation, not styling
-      - metadata.chunk_plan present for any timeline over 20 minutes
+      - "metadata.chunk_plan[] present for any timeline over 20 minutes"
+      - Short timelines are not chunked without a stated rendering reason
+      - "Approved channel opening carried into metadata.opening and counted in the timeline"
+      - Shot holds derive from duration, shot strength and role - not a fixed band
       - "metadata.audio_layers[] and metadata.mix_balance match the EXECUTED mix"
       - Every cut carries a reason that describes a decision
     success_criteria:
@@ -294,10 +358,14 @@ stages:
     optional_tools:
       - video_stitch
       - audio_mixer
+      - frame_sampler
+      - visual_qa
     tools_available:
       - video_compose
       - video_stitch
       - audio_mixer
+      - frame_sampler
+      - visual_qa
     checkpoint_required: true
     human_approval_default: false
     review_focus:
@@ -324,13 +392,19 @@ stages:
       - Camera-movement variety and aerial presence checked on the rendered file
       - No ASMR-loop dominance; season, light and environment coherent
       - Early creative screening used excerpts, not repeated full-film processing
+      - "A BRAND-required opening was rendered, inspected and concatenated - never silently omitted"
+      - A short Remotion opening is not a full-body runtime swap
       - Completed chunks preserved so a late failure resumes, never restarts
+      - Audio-only corrections remuxed without re-encoding the video
     success_criteria:
       - Schema-valid render_report artifact
       - output/final.mp4 exists and passes ffprobe validation
-      - render_report.qc records resolution, fps, pix_fmt, audio, loudness, sync
-      - render_report.qc.transitions records the boundary audit and its method
+      - "render_report.metadata.qc.technical records resolution, fps, pix_fmt, audio, loudness, sync"
+      - "render_report.metadata.qc.transitions records the boundary audit and its method"
+      - "render_report.metadata.qc.audio, .editorial and .brand present"
+      - "QC lives under metadata.qc - the schema forbids a top-level qc key"
       - unexpected_cuts is empty for every audited boundary
+      - A BRAND-required opening is present in the delivered file
       - Editorial findings recorded; any fail sends the run back to edit
 
   # 8 - export the ready-to-publish package (no upload)
@@ -341,10 +415,14 @@ stages:
       - proposal_packet
     produces:
       - publish_log
-    tools_available: []
+    optional_tools:
+      - frame_sampler
+    tools_available:
+      - frame_sampler
     checkpoint_required: true
     human_approval_default: true
     review_focus:
+      - Thumbnail candidates extracted from the finished video with frame_sampler
       - Runs only after final.mp4 exists and passed QC
       - Packaging describes the video actually made, not the plan
       - Title accurate, non-clickbait, not a competitor title reworded

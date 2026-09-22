@@ -1,10 +1,26 @@
 # Relaxation — Executive Producer
 
-You are running the `relaxation` pipeline: a 60–180 minute cinematic relaxation
-video built from **local, operator-supplied licensed media**.
+You are running the `relaxation` pipeline: a cinematic relaxation video at any
+approved duration from **60 seconds to 5 hours** (`metadata.duration` in the
+manifest).
 
-It suits rivers, forests, waterfalls, ocean, rain, nature relaxation, meditation
-and sleep scenery, and comparable long-form calm formats.
+Media is either operator-supplied licensed footage (`licensed_manual`) or
+permitted free stock acquired through OpenMontage's own provider tools
+(`free_auto`). The mode comes from `proposal_packet.metadata.sourcing`, and
+both keep a human approval gate.
+
+It suits rivers, forests, waterfalls, ocean, rain, fireplace, night nature,
+meditation and sleep scenery, and comparable calm formats.
+
+**Editorial scale follows the approved duration**, never a template: movements,
+shot count, hold lengths, music, ambience coverage, sourcing quantity, QC
+sampling and chunking all scale with it. A 60-second piece and a 5-hour film
+are both correct outputs of this pipeline.
+
+Channel identity — subjects, look, audio balance, opening, delivery canvas —
+lives in that channel's `BRAND.md`, never in this pipeline. **If the channel
+requires a branded opening, it is part of the production**: planned at
+proposal, carried through edit, rendered and QC'd at compose.
 
 Read `pipeline_defs/relaxation.yaml` first, then each stage's director skill
 **before** doing any work in that stage.
@@ -76,9 +92,13 @@ case the toolchain has changed.
 3. **`audio_mixer` emits 192 kHz.** Normalise to 48 kHz stereo before composing.
 4. **Single-pass `loudnorm` misses target** (−14 requested → −12.0). Always
    finish with an explicit two-pass loudnorm.
-5. **NVENC needs FFmpeg 7.1.1 here** (`D:\VidQwik AI\Tools\...`); the system
-   FFmpeg 9.0.1 requires a newer NVIDIA driver. It is only ~15% faster with far
-   larger files — **default to `libx264 -crf 18 -preset medium`**.
+5. **`ffmpeg` and `ffprobe` come from PATH** as ordinary `cmd:` dependencies.
+   There is no project-local FFmpeg and no override variable.
+6. **CPU encoding is the production path** — `libx264 -crf 18 -preset medium`.
+   GPU encoding is an optional convenience for drafts; where NVENC is
+   unavailable on the installed driver that is an acceleration limitation, not
+   a production blocker. Measure throughput on the machine you are rendering
+   on rather than quoting a remembered figure.
 
 ## Renderer
 

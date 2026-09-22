@@ -23,7 +23,9 @@ the assertions are about measured behaviour:
 
 from __future__ import annotations
 
+import json
 import math
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -669,3 +671,200 @@ class TestBuiltStemGainsRespectTheRelativeBalance:
         support = prominence_to_db(0.20)
         assert min(WATER_BAND_DB) <= water <= max(WATER_BAND_DB), water
         assert min(SUPPORT_BAND_DB) <= support <= max(SUPPORT_BAND_DB), support
+
+
+# --------------------------------------------------------------------------
+# Delivery: the approved mix is the only audio, and it survives the encode
+# --------------------------------------------------------------------------
+
+
+def _probe(ffmpeg: str, path: Path) -> dict:
+    """Probe with the PATH-resolved ffprobe.
+
+    Deliberately NOT derived from the ffmpeg path by string replacement: the
+    resolved path contains "ffmpeg" in its parent directory too, so replacing
+    the substring mangles it. Resolve ffprobe the same way production does.
+    """
+    del ffmpeg  # resolved independently, through PATH
+    probe = subprocess.run(
+        [camera_motion._binary("ffprobe"),
+         "-v", "error", "-show_streams", "-show_format", "-of", "json", str(path)],
+        capture_output=True, text=True,
+    )
+    return json.loads(probe.stdout)
+
+
+def _band_rms(
+    ffmpeg: str,
+    path: Path,
+    filters: str = "",
+    *,
+    start: float | None = None,
+    length: float | None = None,
+) -> float:
+    """Peak RMS level in dB, optionally over a window and a filtered band."""
+    chain = (filters + "," if filters else "") + "astats=metadata=1:reset=0"
+    args = [ffmpeg, "-nostats", "-hide_banner"]
+    if start is not None:
+        args += ["-ss", f"{start:.3f}"]
+    if length is not None:
+        args += ["-t", f"{length:.3f}"]
+    args += ["-i", str(path), "-af", chain, "-f", "null", "-"]
+    result = subprocess.run(args, capture_output=True, text=True)
+    values = [
+        float(m.group(1))
+        for m in re.finditer(r"RMS level dB:\s*(-?\d+(?:\.\d+)?)", result.stderr)
+    ]
+    return max(values) if values else -120.0
+
+
+@pytest.fixture(scope="module")
+def delivery(ffmpeg: str, tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
+    """A picture that CARRIES ITS OWN AUDIO, plus a separate approved mix.
+
+    Stock clips routinely ship with native sound, and the Asset Director may
+    have classified it REJECT - voices, traffic, handling noise. The delivery
+    must not contain it. The only way to prove that is to build a picture that
+    has some and then check what reached the master.
+    """
+    out = tmp_path_factory.mktemp("relaxation_delivery")
+
+    # Picture with a loud, unmistakable native tone at 4 kHz.
+    picture = out / "picture_with_native_audio.mp4"
+    _run([
+        ffmpeg, "-v", "error", "-y",
+        "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=30:duration=8",
+        "-f", "lavfi", "-i", "sine=frequency=4000:duration=8",
+        "-vf", "format=yuv420p", "-r", "30",
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "20",
+        "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2",
+        "-shortest", str(picture),
+    ])
+
+    # The approved mix: a low 120 Hz bed with a real fade-out at the end.
+    approved = out / "approved_mix.wav"
+    _run([
+        ffmpeg, "-v", "error", "-y", "-f", "lavfi",
+        "-i", "sine=frequency=120:duration=8",
+        "-af", "volume=-10dB,afade=t=in:st=0:d=1,afade=t=out:st=5:d=3",
+        "-ar", "48000", "-ac", "2", "-c:a", "pcm_s16le", str(approved),
+    ])
+    return {"picture": picture, "approved": approved}
+
+
+class TestDeliveredAudioContract:
+    def test_the_picture_fixture_really_has_native_audio(
+        self, ffmpeg: str, delivery: dict[str, Path]
+    ) -> None:
+        """Guard the premise: without native audio the next test proves nothing."""
+        audio = [s for s in _probe(ffmpeg, delivery["picture"])["streams"]
+                 if s["codec_type"] == "audio"]
+        assert len(audio) == 1, "fixture picture should carry native audio"
+
+    def test_rejected_native_audio_cannot_reach_the_master(
+        self, ffmpeg: str, delivery: dict[str, Path], tmp_path: Path
+    ) -> None:
+        """`-map 0:v -map 1:a` is what keeps rejected sound out of delivery."""
+        final = tmp_path / "final.mp4"
+        _run([
+            ffmpeg, "-v", "error", "-y",
+            "-i", str(delivery["picture"]), "-i", str(delivery["approved"]),
+            "-map", "0:v", "-map", "1:a",
+            "-c:v", "copy", "-c:a", "aac", "-b:a", "320k",
+            "-ar", "48000", "-ac", "2", "-movflags", "+faststart",
+            "-shortest", str(final),
+        ])
+        audio = [s for s in _probe(ffmpeg, final)["streams"]
+                 if s["codec_type"] == "audio"]
+        assert len(audio) == 1, (
+            f"delivered file has {len(audio)} audio streams; exactly one - the "
+            "approved mix - may reach the master"
+        )
+        assert int(audio[0]["sample_rate"]) == 48000
+        assert audio[0]["channels"] == 2
+
+        # The native 4 kHz tone must be gone.
+        full = _band_rms(ffmpeg, final)
+        high = _band_rms(ffmpeg, final, "highpass=f=2000")
+        assert high < full - 20, (
+            f"delivered audio still carries high-band content ({high:.1f} dB "
+            f"vs {full:.1f} dB full band) - the native tone leaked into the "
+            "master"
+        )
+
+    def test_mapping_zero_a_would_leak_the_native_audio(
+        self, ffmpeg: str, delivery: dict[str, Path], tmp_path: Path
+    ) -> None:
+        """The mistake the contract forbids, shown to be a real mistake."""
+        leaked = tmp_path / "leaked.mp4"
+        _run([
+            ffmpeg, "-v", "error", "-y", "-i", str(delivery["picture"]),
+            "-map", "0:v", "-map", "0:a", "-c:v", "copy",
+            "-c:a", "aac", "-ar", "48000", "-ac", "2", str(leaked),
+        ])
+        full = _band_rms(ffmpeg, leaked)
+        high = _band_rms(ffmpeg, leaked, "highpass=f=2000")
+        assert high > full - 15, (
+            "the leak fixture should retain the native tone; if it does not, "
+            "the previous test's assertion proves nothing"
+        )
+
+    def test_final_audio_duration_matches_the_picture(
+        self, ffmpeg: str, delivery: dict[str, Path], tmp_path: Path
+    ) -> None:
+        """A mix longer than the picture hides the planned ending."""
+        final = tmp_path / "dur.mp4"
+        _run([
+            ffmpeg, "-v", "error", "-y",
+            "-i", str(delivery["picture"]), "-i", str(delivery["approved"]),
+            "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-c:a", "aac",
+            "-ar", "48000", "-ac", "2", "-shortest", str(final),
+        ])
+        data = _probe(ffmpeg, final)
+        container = float(data["format"]["duration"])
+        video = next(s for s in data["streams"] if s["codec_type"] == "video")
+        audio = next(s for s in data["streams"] if s["codec_type"] == "audio")
+        video_duration = float(video.get("duration") or container)
+        audio_duration = float(audio.get("duration") or container)
+        assert abs(video_duration - audio_duration) <= 0.15, (
+            f"audio runs {audio_duration:.3f}s against a {video_duration:.3f}s "
+            "picture - the planned ending is not where the viewer reaches it"
+        )
+
+    def test_true_peak_and_fade_survive_the_aac_encode(
+        self, ffmpeg: str, delivery: dict[str, Path], tmp_path: Path
+    ) -> None:
+        """Measure the ENCODED file: a WAV inside the ceiling can exceed it."""
+        ceiling_dbtp = -1.5
+        aim_dbtp = -2.5
+
+        limited = tmp_path / "limited.wav"
+        _run([
+            ffmpeg, "-v", "error", "-y", "-i", str(delivery["approved"]),
+            "-af", f"alimiter=limit={10 ** (aim_dbtp / 20):.4f}:level=disabled",
+            "-ar", "48000", "-ac", "2", "-c:a", "pcm_s16le", str(limited),
+        ])
+
+        final = tmp_path / "peak.mp4"
+        _run([
+            ffmpeg, "-v", "error", "-y",
+            "-i", str(delivery["picture"]), "-i", str(limited),
+            "-map", "0:v", "-map", "1:a", "-c:v", "copy",
+            "-c:a", "aac", "-b:a", "320k", "-ar", "48000", "-ac", "2",
+            "-shortest", str(final),
+        ])
+
+        encoded = measure_stem(final)
+        assert encoded.true_peak_dbtp <= ceiling_dbtp, (
+            f"true peak {encoded.true_peak_dbtp} dBTP exceeds the "
+            f"{ceiling_dbtp} dBTP ceiling after the AAC encode - measuring the "
+            "WAV alone would have missed this"
+        )
+
+        duration = float(_probe(ffmpeg, final)["format"]["duration"])
+        tail = _band_rms(ffmpeg, final, start=duration - 0.4, length=0.35)
+        mid = _band_rms(ffmpeg, final, start=duration / 2 - 0.5, length=1.0)
+        assert tail < mid - 15, (
+            f"tail {tail:.1f} dB against mid {mid:.1f} dB - the final fade did "
+            "not survive into the delivered file"
+        )

@@ -84,12 +84,12 @@ from __future__ import annotations
 import json
 import logging
 import math
-import os
-import shutil
 import subprocess
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Optional, Sequence
+
+from lib.ffmpeg_runtime import FFmpegNotAvailable, ffmpeg_path, ffprobe_path
 
 logger = logging.getLogger(__name__)
 
@@ -246,26 +246,12 @@ class ClipMotion:
 # --------------------------------------------------------------------------
 
 
-def _ffmpeg_dir() -> Optional[Path]:
-    """Prefer the pinned 7.1.1 build this installation standardises on."""
-    pinned = Path(r"D:\VidQwik AI\Tools\ffmpeg-7.1.1-full_build\bin")
-    if (pinned / "ffmpeg.exe").is_file():
-        return pinned
-    env = os.environ.get("OPENMONTAGE_FFMPEG_DIR")
-    if env and (Path(env) / "ffmpeg.exe").is_file():
-        return Path(env)
-    found = shutil.which("ffmpeg")
-    return Path(found).parent if found else None
-
-
 def _binary(name: str) -> str:
-    directory = _ffmpeg_dir()
-    if directory is None:
-        raise CameraMotionError(
-            "ffmpeg not found; set OPENMONTAGE_FFMPEG_DIR or put ffmpeg on PATH"
-        )
-    exe = directory / (f"{name}.exe" if os.name == "nt" else name)
-    return str(exe if exe.is_file() else directory / name)
+    """Resolve an FFmpeg binary through PATH, as OpenMontage's tools do."""
+    try:
+        return ffmpeg_path() if name == "ffmpeg" else ffprobe_path()
+    except FFmpegNotAvailable as exc:
+        raise CameraMotionError(str(exc)) from exc
 
 
 def probe_duration(path: str | Path) -> float:

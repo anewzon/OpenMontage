@@ -71,8 +71,17 @@ well-exposed and clean, and record for each range:
 | `loop_suspected` | **measured** |
 | `planned_role` | hero / advancing / transitional / breathing-room |
 
-`lib.camera_motion.sample_frames()` writes sampled frames to `work/`. Look at
-them. **Do not describe footage you have not looked at.**
+**Use the native `frame_sampler` tool** to extract representative frames, then
+look at them. **Do not describe footage you have not looked at.**
+`lib.camera_motion.sample_frames()` exists only as a fallback for a caller that
+already has the module loaded and needs frames alongside a measurement — where
+`frame_sampler` does the job, use `frame_sampler`.
+
+**Analyse each source once.** The measurements and frames recorded here are
+what every later stage reads; re-probing the same file at scene planning, edit
+or compose is wasted work on a long production. If a later stage needs
+something this stage did not record, add it here rather than re-analysing
+downstream.
 
 ### Camera motion is MEASURED, and kept separate from subject motion (binding)
 
@@ -217,11 +226,48 @@ For audio, assess where practical: duration, loudness, ambience type, mood, and
 whether it matches the visible environment — a gentle-creek bed under a
 waterfall is a mismatch, not a soundtrack.
 
-## Output
+## Output — the schema-valid shape (binding)
 
-Write a schema-valid `asset_manifest` to `work/`. Every asset needs `id`, `type`,
-`path`, `duration` and a provenance/licence note. Put probe data, usable ranges,
-flags and `inventory_stats` (including the reuse factor) under `metadata`.
+`asset_manifest.assets[]` is a **closed** schema object. Adding a field to an
+asset entry fails validation. The canonical fields are:
+
+| Required | Also allowed |
+|---|---|
+| `id`, `type`, `path`, `source_tool`, `scene_id` | `duration_seconds`, `resolution`, `format`, `cost_usd`, `provider`, `license`, `original_url`, `generation_summary`, `subtype`, `quality_score`, … |
+
+Note **`duration_seconds`**, not `duration`. There is no top-level `duration`
+field and inventing one fails validation.
+
+All relaxation-specific per-asset analysis goes in a metadata map keyed by
+asset id:
+
+```yaml
+metadata:
+  asset_analysis:
+    pexels_4318716:
+      probe: {width: 1920, height: 1080, fps: "24/1", pix_fmt: yuv420p,
+              has_audio: true}
+      usable_ranges:
+        - {in_seconds: 0.6, out_seconds: 18.6, shot_scale: wide,
+           camera_motion: tracking, camera_direction: down,
+           camera_speed_band: graceful, camera_steadiness: steady,
+           camera_displacement_per_second: 0.067,
+           subject_motion: strong, subject_moving_fraction: 0.71,
+           season: indeterminate, weather: overcast, light: "diffuse overcast",
+           environment: "rocky mountain river", dominant_colour: "grey-teal",
+           planned_role: hero}
+      loop_suspected: false
+      native_audio: {classification: USE, measured_lufs: -21.4}
+      flags: []
+      quality_findings: []
+  inventory_stats:
+    reuse_factor: 0.62
+    movement_profile: {...}       # from lib.camera_motion.movement_profile()
+```
+
+Keep aggregate figures — reuse factor, movement profile, totals — in
+`metadata.inventory_stats`, and per-asset detail in `metadata.asset_analysis`.
+The Scene Director reads both.
 
 Keep analysis files in `work/` — the operator never manages them.
 
