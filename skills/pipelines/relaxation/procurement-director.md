@@ -134,6 +134,61 @@ Two rules that follow:
 Where the provider exposes a **length filter**, use it — raising the minimum
 clip length is the single most effective way to keep the clip count sane.
 
+## Music needs approval, not just retrieval
+
+**The stock tools return the first matching result. That is retrieval, not
+creative approval** — and music is the layer where an unsuitable pick is most
+damaging, because a single vocal line ruins an hour of footage.
+
+Work through this before any track is accepted:
+
+1. **Establish the episode's musical direction** from the approved proposal —
+   instrumentation, mood, and how the music should sit against the water.
+2. **Discover several candidates**, not one. Vary the query and the page; the
+   tools always take result[0], so a single call gives you a single opinion.
+3. **Inspect actual metadata and playable content** — duration, structure, and
+   what the recording genuinely contains.
+4. **Reject vocals, lyrics and unsuitable arrangements.** See below.
+5. **Check mood, musical transitions, duration and quality** across the whole
+   track, not just its opening.
+6. **Verify provenance and intended-use terms** — provider, creator, licence,
+   and whether that licence actually covers a music-led long-form upload.
+7. **Approve a coherent programme** before editing starts, not track by track
+   as the edit proceeds.
+
+### Screening vocals — the honest procedure
+
+**Metadata does not prove a track is instrumental.** A title, a tag, a category
+called "instrumental" and a search term are all hints, never evidence.
+
+Screen in this order, and record which step actually decided it:
+
+- **Title/tag pre-filter** — cheap rejection of anything naming vocals, choir,
+  lyrics, a singer, or a featured vocalist. This *rejects*; it never *accepts*.
+- **Audible review** — listen across the track, not only the first seconds.
+  Vocals frequently enter after an instrumental intro, which is exactly what a
+  brief listen misses.
+- **If no audible review is possible in this session**, mark the track
+  `vocals_unverified` and **escalate for an operator decision.** Do not record
+  a pass. Do not state or imply that a detector cleared it when no detector
+  ran.
+
+The channel's prohibited-content list is in its `BRAND.md` and is binding —
+this pipeline does not restate a house musical taste, because another
+relaxation channel may legitimately want ocean, rain, a different instrumental
+style, or no music at all.
+
+### Licensing
+
+Record any material licensing or Content ID uncertainty against the asset. A
+generic stock licence does **not** automatically permit every kind of
+music-led relaxation upload, and a free licence guarantees nothing about a
+platform's monetisation decisions.
+
+**Never silently substitute unsuitable music to get a video finished.** If the
+configured providers genuinely cannot supply enough appropriate candidates,
+report that capability gap and the smallest native change that would close it.
+
 ## Sound: an evolving bed, not one file on repeat
 
 The soundscape must change across the runtime. A single ambience file looping

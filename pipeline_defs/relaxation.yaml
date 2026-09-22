@@ -43,6 +43,8 @@ required_skills:
   - pipelines/relaxation/scene-director
   - pipelines/relaxation/edit-director
   - pipelines/relaxation/publish-director
+  - meta/asset-procurement
+  - meta/audio-mastering
   - meta/reviewer
   - meta/checkpoint-protocol
 
@@ -146,6 +148,9 @@ stages:
       - Unsuitable assets rejected with a reason rather than forced in
       - Licence evidence cross-referenced; unverified assets flagged
       - Reuse factor reported against the approved duration
+      - "Every clip's native audio classified USE / USE_AFTER_TREATMENT / REJECT / NO_AUDIO"
+      - Usable native audio has a MEASURED level, never a blanket percentage
+      - Music auditioned for vocals; unverifiable tracks marked and escalated, never passed
     success_criteria:
       - Schema-valid asset_manifest artifact
       - Every asset has path, type, duration and a provenance note
@@ -205,6 +210,12 @@ stages:
       - Audio layers declared with per-layer volume, offset and fades
       - J-cuts and L-cuts expressed as audio offsets, never video trims
       - Mixed soundscape normalised to 48 kHz stereo, loudness two-pass verified
+      - Mix length DERIVED from the approved timeline, not a round number
+      - Final fade lands inside the final duration
+      - Rejected native audio contributes nothing; accepted native audio is range-aligned
+      - Native water not doubled with an equivalent library water bed
+      - Music not ducked under ambience; no dialogue-mixing conventions applied
+      - Long-form coverage counted honestly - overlapping files are not extra coverage
       - Grade is restrained normalisation, not styling
       - metadata.chunk_plan present for any timeline over 20 minutes
       - Every cut carries a reason that describes a decision
@@ -241,6 +252,11 @@ stages:
       - Final assembly used stream copy, not a second lossy re-encode
       - Output is 3840x2160 (or the approved canvas) / 30 fps / yuv420p / H.264
       - Audio is AAC 48 kHz stereo at the approved loudness and true peak
+      - "Delivered file has EXACTLY one audio stream - the approved mix, mapped 0:v + 1:a"
+      - True peak measured with ebur128 on the ENCODED file, not sample peak on the WAV
+      - Final fade verified present in the delivered file by measuring tail levels
+      - Audio content reviewed - vocals, water coherence, balance, continuity
+      - Checks that could not actually run are declared, never recorded as passes
       - Duration matches the planned timeline within 2 seconds
       - Editorial pass - no mechanical repetition, no stock-playlist feeling
       - Completed chunks preserved so a late failure resumes, never restarts

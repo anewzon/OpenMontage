@@ -90,6 +90,44 @@ Probe the finished file and record in `render_report.qc`:
 - A/V sync at start, middle and end
 - sampled frames per movement — no black, frozen or ungraded frames
 
+## QC — audio
+
+Audio gets its own pass. A film can be technically perfect and unlistenable.
+
+**Keep the approved mix authoritative.** When muxing, map video from the
+picture and audio **only** from the approved mix (`-map 0:v -map 1:a`). Never
+map `0:a` from an assembled body: intermediate concatenations carry the source
+clips' own audio, and mapping it would put rejected native sound underneath the
+master. Confirm the delivered file has **exactly one audio stream**.
+
+**Measurements — name them correctly.** Report integrated loudness (LUFS),
+**true peak** from `ebur128=peak=true`, short-term loudness and LRA.
+**Sample peak is not true peak** — do not substitute one for the other. Measure
+the **encoded** file; a WAV that met the ceiling can exceed it after AAC.
+
+**Content checks:**
+
+| Area | Check |
+|---|---|
+| Music | No vocals or lyrics where the channel forbids them; mood and intensity appropriate; progression smooth |
+| Nature | Audible, coherent water foundation; environmental detail appropriate; no contaminated native audio; no two water beds contradicting each other |
+| Mix | Music/water balance; consistent gain; nothing masked; no overload, clipping or distortion; restrained dynamics; clean stereo and mono fold-down |
+| Continuity | Every music boundary, environmental crossover and reused-audio junction; the opening and the ending; no gaps, no truncated fade |
+| Technical | Correct duration, sample rate, channels, integrated loudness, measured true peak, encoded audio, A/V sync at start, middle and end |
+
+**Duration:** the mixed audio must match the approved timeline. A mix longer
+than the picture means the ending was planned somewhere the viewer never
+reaches; a mix shorter means a silent tail. Both are failures, not roundings.
+
+**Verify the final fade actually survived** into the delivered file by
+measuring levels across the last seconds — not by trusting that a fade filter
+was in the command.
+
+> **Honesty rule.** A passing `ffprobe`, a successful FFmpeg exit code and a
+> plausible LUFS figure are **not** a pass. Where a check needs listening and
+> this session cannot listen, say so and request a listening review. **Never
+> record a pass for a check that did not run.**
+
 ## QC — editorial
 
 The technical pass says the file is valid. This one says it is worth watching.

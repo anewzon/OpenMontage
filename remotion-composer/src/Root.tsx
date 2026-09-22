@@ -207,10 +207,13 @@ export const Root: React.FC = () => {
         height={1080}
         defaultProps={{
           videoSrc: "",
-          wordmark: "River Flow Naturescapes",
+          // Hierarchy: the welcome message is the headline, the channel name
+          // is a small signature. See Channels/channel_0001/BRAND.md.
+          brandSignature: "River Flow Naturescapes",
+          welcomeMessage: "Flow Into Calm",
           episodeLine: undefined,
           durationSeconds: 8,
-          scrimOpacity: 0.38,
+          scrimOpacity: 0.28,
         } as RiverFlowOpeningProps}
         calculateMetadata={calculateRiverFlowOpeningMetadata}
       />

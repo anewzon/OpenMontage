@@ -82,6 +82,37 @@ grading/framing; below 0.15 means the target duration should come down or more
 footage should come in. State which band you are in and recommend accordingly —
 do not just hand over a number.
 
+## Classify every clip's native audio
+
+Source clips often carry their own sound. **Do not blanket-keep it and do not
+blanket-mute it** — decide per clip, and record the decision.
+
+For each clip with an audio stream, establish: is the sound genuinely
+synchronised to what is visible? Is the recording clean? Does it contain
+voices, traffic, handling noise, microphone wind, baked-in music or other
+contamination? Does it match the environment the scene plan puts it in?
+
+Then classify:
+
+| Class | Meaning |
+|---|---|
+| `USE` | Clean, synchronised, matches the scene — may join the water/environment foundation |
+| `USE_AFTER_TREATMENT` | Useful content behind a fixable problem (wind rumble, hiss, a little too hot) |
+| `REJECT` | Voices, traffic, handling noise, baked-in music, or sound that contradicts the picture |
+| `NO_AUDIO` | No audio stream present |
+
+Clean native river or waterfall sound is often **better** than a library bed,
+because it is genuinely the water on screen. Useful native birds or wind can
+feed the environmental layer.
+
+**Measure, do not guess a level.** Record each usable clip's actual loudness so
+the Edit Director can set a real gain. **Never assign a blanket figure such as
+"native audio at 10%"** — that is a guess dressed as a decision.
+
+Note the risk explicitly for anything classified `REJECT`: rejected audio must
+not reach the master, and the Edit and Compose Directors rely on this
+classification to keep it out.
+
 ## Reject, don't force
 
 **Not every downloaded file belongs in the video.** The employee downloaded what

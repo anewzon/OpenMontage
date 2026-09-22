@@ -295,6 +295,7 @@ Cross-cutting skills that apply to all pipelines:
 | Bespoke Composition (Atelier) | `meta/bespoke-composition.md` | Hand-author a composition from scratch (hero work) — no stock scene-types; routes art-direction → motion principles → engine mechanics → atelier render |
 | Asset Procurement | `meta/asset-procurement.md` | How to discover, evaluate and verify stock assets from a provider and produce an exact-item procurement list for a human to license — provider-aware, format-agnostic |
 | VidQwik Pipeline Authoring | `meta/vidqwik-pipeline-authoring.md` | Architectural guardrail: decide where new behaviour belongs before creating a pipeline, skill or subsystem |
+| Audio Mastering | `meta/audio-mastering.md` | Generic mix engineering: gain staging, corrective processing, timeline-derived duration, two-pass loudness, true-peak vs sample-peak, mono fold-down, encoded-file verification |
 
 ## Style Playbooks
 
