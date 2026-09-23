@@ -106,10 +106,14 @@ def test_no_contract_test_reads_production_projects() -> None:
     """Tests must pass in a clean checkout: projects/ is git-ignored."""
     import re
 
-    # A path built into a production project: "projects" then a channel_NNNN
-    # project id, whether joined with "/" in a string or with Path's "/".
+    # A path into the REAL projects folder: anchored at the repository root
+    # (ROOT / REPO_ROOT / PROJECT_ROOT) or at lib.paths.PROJECTS_DIR, then a
+    # channel_NNNN project id. Temporary fixtures that build their own
+    # "projects/channel_..." tree under tmp_path are not production data.
     production_path = re.compile(
-        r"""projects["']?\s*(?:\)\s*)?[/\\]\s*(?:\(\s*)?\n?\s*["']?channel_\d{4}__""")
+        r"""(?:\b(?:ROOT|REPO_ROOT|PROJECT_ROOT)\s*/\s*["']projects["']"""
+        r"""|\bPROJECTS_DIR\b)\s*(?:/\s*)?\n?\s*(?:/\s*)?["']?channel_\d{4}__"""
+        r"""|\b(?:ROOT|REPO_ROOT|PROJECT_ROOT)\s*/\s*["']projects/channel_\d{4}__""")
     offenders = [path.relative_to(ROOT).as_posix()
                  for path in (ROOT / "tests").rglob("*.py")
                  if production_path.search(path.read_text(encoding="utf-8", errors="replace"))]

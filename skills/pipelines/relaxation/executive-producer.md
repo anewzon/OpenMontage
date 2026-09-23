@@ -69,8 +69,10 @@ mirror, never the other way round.
   0.00 USD. Generated music (`suno_music`) and generated SFX (`elevenlabs_sfx`)
   are the only paid providers in this pipeline's plan; they are priced at
   `proposal`, approved by the operator as `approval.approved_budget_usd`, and
-  run at `assets` through `approved_budget_tracker(...).run_tool(...)` —
-  OpenMontage's `CostTracker` in cap mode. A call the budget cannot cover
+  run at `assets` only through `generate_music_programme` and
+  `generate_sfx_source`, on `approved_budget_tracker(...)` — OpenMontage's
+  `CostTracker` in cap mode, with each tool held to its own approved
+  allocation. A call the budget cannot cover
   **stops the run**; it is not a warning. No generative video, image or TTS
   provider is called. If material is missing, say what is missing and stop —
   do not generate an unplanned substitute.
@@ -86,6 +88,39 @@ mirror, never the other way round.
 - **No narration, no subtitles**, unless the brief explicitly asks.
 - **Never publish.** Produce the package in `output/`. Uploading is the
   operator's decision, made outside this system.
+
+## Production mode and platform defects (binding)
+
+Videos are made in **production mode** (`lib/production_mode.py`). The engine
+and shared policy are read-only - `lib/`, `tools/`, `pipeline_defs/`,
+`skills/`, `schemas/`, the Remotion sources, configuration and permission
+files, every channel's `BRAND.md`, `ARCHITECTURE.md` and the operator guide -
+and development git (reset, clean, checkout, switch, restore, merge, pull,
+push, rebase, commit, stash, tag, branch) is refused. A production session
+writes only its own project: artifacts, media, checkpoints and reports under
+`projects/<project_id>/`.
+
+**Never patch the engine during a production run** - not a one-line fix, not
+a workaround file, not a changed default - and never try to lift a
+restriction: do not clear read-only attributes, edit permission files, run
+denied git commands another way, or turn production mode off. Only the
+operator turns it off, at their own terminal, to develop.
+
+**The defect rule.** When the platform itself is wrong - a tool crashes, a
+library returns something impossible, a Director contradicts the code, a
+gate cannot be satisfied because of a bug rather than the project:
+
+**platform defect -> checkpoint the current project -> report the defect -> stop**
+
+```python
+from lib.production_mode import record_platform_defect
+record_platform_defect(project_dir, stage=current_stage, summary="...", evidence="...")
+```
+
+It writes `work/defects/<utc>_<stage>.md` and re-writes the stage's
+checkpoint as `failed` with its artifacts kept, so the project resumes
+exactly there once the engine is fixed in a separate development session.
+Then tell the operator what broke, with the evidence, and **end the turn**.
 
 ## Verified platform constraints
 
