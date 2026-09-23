@@ -417,6 +417,9 @@ stages:
     checkpoint_required: true
     human_approval_default: false
     review_focus:
+      - "Every piece encoded to the delivery contract (lib.delivery_qc): BT.709, limited range, yuv420p, SAR 1:1"
+      - "Opening rendered with render_opening; compare_segments(opening, body) is empty before joining"
+      - "delivery_qc report recorded in render_report.metadata.qc.technical; a failed check is a blocker"
       - Routed by the locked render_runtime; no silent runtime swap
       - One chunk rendered and inspected before the long encode
       - Final assembly used stream copy, not a second lossy re-encode
@@ -473,6 +476,9 @@ stages:
     review_focus:
       - Thumbnail candidates extracted from the finished video with frame_sampler
       - Runs only after final.mp4 exists and passed QC
+      - "Publish checkpoint written only through the gate: assess_publish_readiness + write_publish_gate; any blocker writes failed"
+      - "Every asset the final edit uses has verified licence or provenance evidence; a missing receipt is a blocker, not a note"
+      - "Mix verified against the channel's current channel-mix block (check_mix_record); master passes delivery_qc"
       - Packaging describes the video actually made, not the plan
       - Title accurate, non-clickbait, not a competitor title reworded
       - Title formula differs from the channel's previous upload

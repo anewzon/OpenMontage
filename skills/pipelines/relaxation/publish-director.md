@@ -5,6 +5,42 @@ Produces: `publish_log` (internal), `output/thumbnail.jpg`, `output/publish.txt`
 **Export only. Nothing is uploaded.** This stage packages the finished video so
 a human can publish it, and records the canonical `publish_log` internally.
 
+## The publish gate comes first (binding)
+
+**The project is publish-ready only when the executable gate says so.** Before
+writing any packaging, run it on the finished master:
+
+```python
+from lib.relaxation_publish_gate import assess_publish_readiness, write_publish_gate
+readiness = assess_publish_readiness(
+    project_dir, proposal_packet=..., asset_manifest=..., edit_decisions=...,
+    render_report=..., channel_brand=r"<VidQwik root>\Channels\<channel_id>\BRAND.md")
+write_publish_gate(pipeline_dir, project_id, readiness)
+```
+
+It blocks - and `write_publish_gate` writes the publish checkpoint as
+`failed` with every blocker - when:
+
+- **any asset the final edit uses lacks licence or provenance evidence.**
+  Licensed stock needs its receipt in the project's `licenses/` folder,
+  recorded with `record_licence_evidence` (SHA-256 checked every time); free
+  stock needs its licence and source URL; generated audio needs its accepted
+  record in the paid-audio ledgers. Media the edit uses that the manifest does
+  not list is unknown provenance. **A missing receipt is a blocker, not a
+  note.** Unused downloaded alternates are listed separately and never block.
+- **the mix was not solved from the channel's current `channel-mix` block**,
+  or its verification failed a band (`check_mix_record`);
+- **the master fails the delivery contract** (`delivery_qc`: canvas, fps,
+  pixel format, colour, SAR, duration, one audio stream, loudness, true peak,
+  black/frozen spans, decode, A/V length, opening/body match).
+
+Only a report with no blockers is written `awaiting_human` - the operator's
+publish gate. **Never write the publish checkpoint yourself**, never
+describe a blocked project as ready, and never "fix" a blocker by editing the
+manifest or the report: report the blockers to the operator and stop. After
+the operator approves, record it with `approve_publish(...)`, which re-runs
+the gate and refuses a master that changed since it was presented.
+
 ## Run only after the video exists
 
 `output/final.mp4` must exist and have passed QC. Packaging describes **the
@@ -173,6 +209,7 @@ Verify that. Anything else â€” work files, chunk leftovers, an alternative cut â
 moves to `work/` or goes. The operator opens that folder and sees three files
 and no decisions to make.
 
-Record `publish_log` with the exported package (no upload entry), run
-`skills/meta/reviewer.md`, checkpoint, and report the three paths, the chosen
-title and anything they should check before publishing.
+Run `skills/meta/reviewer.md`, then write the checkpoint **through the gate**
+(`write_publish_gate`) - never directly - and report the three paths, the
+chosen title, the gate's result and anything they should check before
+publishing.
