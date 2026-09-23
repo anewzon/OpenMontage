@@ -260,7 +260,7 @@ class TestCameraMotionIsNotSubjectMotion:
         assert profile["clips"] == 3
         assert profile["moving_camera_clips"] == 1
         assert profile["moving_camera_share"] == pytest.approx(1 / 3, abs=0.01)
-        assert profile["locked_off_moving_water_clips"] >= 1, (
+        assert profile["locked_off_moving_subject_clips"] >= 1, (
             "a locked-off shot with in-frame motion must be counted as such"
         )
         assert "static" in profile["distinct_camera_motions"]

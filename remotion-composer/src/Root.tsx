@@ -17,10 +17,10 @@ import { CaptionOverlay, WordCaption } from "./components/CaptionOverlay";
 import { CollageBurst, CollageBurstProps } from "./CollageBurst";
 import { LyricOverlay, LyricOverlayProps } from "./LyricOverlay";
 import {
-  RiverFlowOpening,
-  RiverFlowOpeningProps,
-  calculateRiverFlowOpeningMetadata,
-} from "./RiverFlowOpening";
+  ScenicOpening,
+  ScenicOpeningProps,
+  calculateScenicOpeningMetadata,
+} from "./ScenicOpening";
 
 // ---------------------------------------------------------------------------
 // Theme System — prevents every video from looking like dark fintech
@@ -196,27 +196,38 @@ export const Root: React.FC = () => {
           highlightColor: "#22D3EE",
         }}
       />
-      <Composition
-        id="RiverFlowOpening"
-        component={RiverFlowOpening}
-        // Channel opening: restrained wordmark over episode footage.
-        // Metadata (size + duration) is derived from the supplied bed clip.
-        durationInFrames={30 * 8}
-        fps={30}
-        width={1920}
-        height={1080}
-        defaultProps={{
-          videoSrc: "",
-          // Hierarchy: the welcome message is the headline, the channel name
-          // is a small signature. See Channels/channel_0001/BRAND.md.
-          brandSignature: "River Flow Naturescapes",
-          welcomeMessage: "Flow Into Calm",
-          episodeLine: undefined,
-          durationSeconds: 8,
-          scrimOpacity: 0.28,
-        } as RiverFlowOpeningProps}
-        calculateMetadata={calculateRiverFlowOpeningMetadata}
-      />
+      {/*
+        Channel opening for the scenic/relaxation grammar: a restrained
+        wordmark over the episode's own footage. Every text value comes from
+        the production's props (the channel's BRAND.md names the signature;
+        the welcome and episode lines are written per episode). The defaults
+        here are placeholders, never a channel's identity. Metadata (size and
+        duration) comes from the delivery contract or the supplied bed clip.
+        "RiverFlowOpening" is the composition's original id, kept as an alias
+        so an approved proposal that names it still renders.
+      */}
+      {["ScenicOpening", "RiverFlowOpening"].map((id) => (
+        <Composition
+          key={id}
+          id={id}
+          component={ScenicOpening}
+          durationInFrames={30 * 8}
+          fps={30}
+          width={1920}
+          height={1080}
+          defaultProps={{
+            videoSrc: "",
+            // Hierarchy: the welcome message is the headline, the channel
+            // name is a small signature.
+            brandSignature: "Channel Signature",
+            welcomeMessage: "Welcome",
+            episodeLine: undefined,
+            durationSeconds: 8,
+            scrimOpacity: 0.28,
+          } as ScenicOpeningProps}
+          calculateMetadata={calculateScenicOpeningMetadata}
+        />
+      ))}
       <Composition
         id="TitledVideo"
         component={TitledVideo}

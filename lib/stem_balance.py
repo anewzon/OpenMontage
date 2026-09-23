@@ -42,8 +42,11 @@ What this module does instead
 The numbers (which offsets, which bands, which members) are channel taste
 and belong in that channel's BRAND.md. This module holds none of them: a
 channel states them in ONE fenced ``channel-mix`` block, which
-`channel_mix_from_brand` parses and validates. There is no default band - a
-water role solved without its channel's band is an error, never a fallback.
+`channel_mix_from_brand` parses and validates. The roles are generic - a
+reference layer, an optional principal environment layer, an optional
+supporting group and an optional detail group - and there is no default
+band: a principal role solved without its channel's band is an error,
+never a fallback.
 
 Usage
 -----
@@ -485,9 +488,11 @@ def solve_balance(
     spec: BalanceSpec,
     measured_built_lufs: Mapping[str, float],
     *,
+    principal_role: Optional[str] = None,
+    principal_band: Optional[tuple[float, float]] = None,
+    group_bands: Optional[Mapping[str, tuple[float, float]]] = None,
     water_role: Optional[str] = None,
     water_band: Optional[tuple[float, float]] = None,
-    group_bands: Optional[Mapping[str, tuple[float, float]]] = None,
 ) -> BalancePlan:
     """Derive per-role targets and gains from measured built stems.
 
@@ -500,14 +505,24 @@ def solve_balance(
     relationship and the overall level follows from it — rather than the
     reverse, where final normalisation is asked to repair a balance it cannot
     reach inside.
+
+    ``principal_role`` is the channel's principal environment layer - water
+    for a river channel; surf, rain, traffic or crackle for another; or none
+    at all. ``water_role`` / ``water_band`` are the pre-generalisation names
+    and mean exactly the same thing.
     """
+    if water_role is not None or water_band is not None:
+        if principal_role is not None or principal_band is not None:
+            raise StemBalanceError("pass principal_role/principal_band OR the legacy "
+                                   "water_role/water_band, not both")
+        principal_role, principal_band = water_role, water_band
     group_bands = dict(group_bands or {})
     notes: list[str] = []
-    if water_role and water_band is None:
+    if principal_role and principal_band is None:
         # There used to be a built-in default band here. It silently restored
         # a generic relationship the channel had long since replaced.
         raise StemBalanceError(
-            f"water role {water_role!r} was given without its band. The band is "
+            f"principal role {principal_role!r} was given without its band. The band is "
             "channel taste: read it from the channel's BRAND.md "
             "(channel_mix_from_brand) - there is no default."
         )
@@ -536,12 +551,12 @@ def solve_balance(
 
     for role, prominence in spec.roles.items():
         offset = prominence_to_db(prominence)
-        if water_role and role == water_role:
-            clamped = clamp_to_band(offset, water_band)
+        if principal_role and role == principal_role:
+            clamped = clamp_to_band(offset, principal_band)
             if abs(clamped - offset) > 0.01:
                 notes.append(
                     f"{role}: derived offset {offset:.2f} dB clamped to "
-                    f"{clamped:.2f} dB by the stated band {water_band}"
+                    f"{clamped:.2f} dB by the stated band {principal_band}"
                 )
             offset = clamped
         offsets[role] = offset
@@ -623,10 +638,18 @@ def solve_balance(
 # --------------------------------------------------------------------------
 # The channel's own mix settings (one ``channel-mix`` block in BRAND.md)
 # --------------------------------------------------------------------------
+#
+# The role model is generic: a REFERENCE layer (the anchor, often music), an
+# optional PRINCIPAL ENVIRONMENT layer (water for a river channel; surf, rain,
+# traffic, crackle or habitat sound for another; none at all for a channel that
+# wants only music), an optional SUPPORTING group and an optional DETAIL group.
+# The mathematics is the same for every channel; only the block differs.
+# ``water:`` is accepted as the pre-generalisation spelling of ``principal:``.
 
 _MIX_BLOCK = re.compile(r"^```channel-mix[ \t]*\n(.*?)^```[ \t]*$", re.S | re.M)
-_TOP_KEYS = {"reference_role", "master_target_lufs", "water", "supporting_group", "approved"}
-_WATER_KEYS = {"role", "offset_db", "band_db", "treatment_af"}
+_TOP_KEYS = {"reference_role", "master_target_lufs", "principal", "water", "supporting_group",
+             "detail_group", "approved"}
+_PRINCIPAL_KEYS = {"role", "offset_db", "band_db", "treatment_af"}
 _GROUP_KEYS = {"name", "offset_db", "band_db", "members"}
 #: Offsets are below the reference, and a mix a listener can hear sits well
 #: inside this range. Anything outside it is a typo, not taste.
@@ -673,48 +696,139 @@ def _exact_keys(data: Any, allowed: set[str], required: set[str], where: str) ->
 
 
 @dataclass(frozen=True)
+class GroupMix:
+    """One named group of layers sharing a single allowance below the reference."""
+
+    name: str
+    offset_db: float
+    band_db: tuple[float, float]
+    members: Mapping[str, float]
+
+    def to_metadata(self) -> dict[str, Any]:
+        return {"name": self.name, "offset_db": self.offset_db, "band_db": list(self.band_db),
+                "members": dict(self.members)}
+
+
+def _group(data: Any, where: str) -> GroupMix:
+    group = _exact_keys(data, _GROUP_KEYS, _GROUP_KEYS, where)
+    offset = _number(group["offset_db"], f"{where}.offset_db")
+    band = _band(group["band_db"], offset, where)
+    if not isinstance(group["members"], Mapping) or not group["members"]:
+        raise ChannelMixError(f"{where}.members must name at least one role")
+    members: dict[str, float] = {}
+    for role, weight in group["members"].items():
+        weight = _number(weight, f"{where}.members.{role}")
+        if weight <= 0:
+            raise ChannelMixError(f"member weight for {role!r} must be positive")
+        members[str(role)] = weight
+    return GroupMix(name=str(group["name"]), offset_db=offset, band_db=band, members=members)
+
+
+@dataclass(frozen=True)
 class ChannelMix:
-    """A channel's approved layer relationship, exactly as its BRAND.md states it."""
+    """A channel's approved layer relationship, exactly as its BRAND.md states it.
+
+    ``principal_role`` is ``None`` for a channel with no principal environment
+    layer. ``groups`` holds the supporting group and, when stated, the detail
+    group, in that order.
+    """
 
     reference_role: str
     master_target_lufs: float
-    water_role: str
-    water_offset_db: float
-    water_band_db: tuple[float, float]
-    water_treatment_af: Optional[str]
-    group_name: Optional[str]
-    group_offset_db: Optional[float]
-    group_band_db: Optional[tuple[float, float]]
-    members: Mapping[str, float]
+    principal_role: Optional[str]
+    principal_offset_db: Optional[float]
+    principal_band_db: Optional[tuple[float, float]]
+    principal_treatment_af: Optional[str]
+    groups: tuple[GroupMix, ...]
     approved: Mapping[str, Any]
     block_sha256: str
     source: Optional[str] = None
     source_sha256: Optional[str] = None
+
+    # ---- the supporting group, by its long-standing names --------------------
+
+    @property
+    def supporting_group(self) -> Optional[GroupMix]:
+        return self.groups[0] if self.groups else None
+
+    @property
+    def detail_group(self) -> Optional[GroupMix]:
+        return self.groups[1] if len(self.groups) > 1 else None
+
+    @property
+    def group_name(self) -> Optional[str]:
+        return self.supporting_group.name if self.supporting_group else None
+
+    @property
+    def group_offset_db(self) -> Optional[float]:
+        return self.supporting_group.offset_db if self.supporting_group else None
+
+    @property
+    def group_band_db(self) -> Optional[tuple[float, float]]:
+        return self.supporting_group.band_db if self.supporting_group else None
+
+    @property
+    def members(self) -> Mapping[str, float]:
+        return self.supporting_group.members if self.supporting_group else {}
+
+    # ---- the pre-generalisation names, kept so nothing that read them breaks --
+
+    @property
+    def water_role(self) -> Optional[str]:
+        return self.principal_role
+
+    @property
+    def water_offset_db(self) -> Optional[float]:
+        return self.principal_offset_db
+
+    @property
+    def water_band_db(self) -> Optional[tuple[float, float]]:
+        return self.principal_band_db
+
+    @property
+    def water_treatment_af(self) -> Optional[str]:
+        return self.principal_treatment_af
+
+    @property
+    def group_bands(self) -> dict[str, tuple[float, float]]:
+        return {g.name: g.band_db for g in self.groups}
+
+    @property
+    def all_roles(self) -> list[str]:
+        roles = [self.reference_role]
+        if self.principal_role:
+            roles.append(self.principal_role)
+        for g in self.groups:
+            roles.extend(g.members)
+        return roles
 
     # ---- solving ----------------------------------------------------------
 
     def spec(self, present_roles: Optional[Iterable[str]] = None) -> BalanceSpec:
         """The `BalanceSpec` for the stems that actually exist.
 
-        The reference and the water role are required. A group member with no
-        stem is dropped and the remaining members share the WHOLE group
-        allowance in their stated ratio - which is how the block's weights are
-        defined, not an adjustment.
+        The reference role - and the principal role, when the channel states
+        one - are required. A group member with no stem is dropped and the
+        remaining members share the WHOLE group allowance in their stated
+        ratio - which is how the block's weights are defined, not an
+        adjustment. A group with no member present is dropped.
         """
         present = None if present_roles is None else set(present_roles)
-        for role in (self.reference_role, self.water_role):
+        required = [self.reference_role] + ([self.principal_role] if self.principal_role else [])
+        for role in required:
             if present is not None and role not in present:
                 raise ChannelMixError(f"required role {role!r} has no stem")
         groups: dict[str, GroupSpec] = {}
-        if self.group_name:
-            members = {r: w for r, w in self.members.items() if present is None or r in present}
+        for g in self.groups:
+            members = {r: w for r, w in g.members.items() if present is None or r in present}
             if members:
-                groups[self.group_name] = GroupSpec(
-                    prominence=10 ** (self.group_offset_db / 20.0), members=members)
+                groups[g.name] = GroupSpec(prominence=10 ** (g.offset_db / 20.0), members=members)
+        roles = ({self.principal_role: 10 ** (self.principal_offset_db / 20.0)}
+                 if self.principal_role else {})
         return BalanceSpec(
             reference_role=self.reference_role,
             master_target_lufs=self.master_target_lufs,
-            roles={self.water_role: 10 ** (self.water_offset_db / 20.0)},
+            roles=roles,
             groups=groups,
         )
 
@@ -722,33 +836,36 @@ class ChannelMix:
         """Solve from MEASURED BUILT stems, with the channel's bands enforced."""
         spec = self.spec(measured_built_lufs)
         plan = solve_balance(
-            spec, measured_built_lufs, water_role=self.water_role,
-            water_band=self.water_band_db,
-            group_bands={self.group_name: self.group_band_db} if spec.groups else None,
+            spec, measured_built_lufs, principal_role=self.principal_role,
+            principal_band=self.principal_band_db,
+            group_bands={n: b for n, b in self.group_bands.items() if n in spec.groups} or None,
         )
-        omitted = sorted(r for r in self.members if r not in measured_built_lufs)
-        if omitted:
-            plan.notes.append(f"no stem for {omitted}; the remaining group members share "
-                              "the whole group allowance in their stated ratio")
+        for g in self.groups:
+            omitted = sorted(r for r in g.members if r not in measured_built_lufs)
+            if omitted and g.name in spec.groups:
+                plan.notes.append(f"no stem for {omitted}; the remaining group members share "
+                                  "the whole group allowance in their stated ratio")
         return plan
 
     def check(self, verification: BalanceVerification) -> list[str]:
         """Every achieved relationship outside the channel's bands (both edges)."""
         failures = list(verification.failures)
-        water = verification.achieved_offsets_db.get(self.water_role)
-        low, high = self.water_band_db
         tol = verification.tolerance_lu
-        if water is None:
-            failures.append(f"{self.water_role}: not re-measured")
-        elif not low - tol <= water <= high + tol:
-            failures.append(f"{self.water_role}: {water:+.2f} dB from the reference is outside "
-                            f"the channel band [{low}, {high}]")
-        if self.group_name and self.group_name in verification.achieved_group_offsets_db:
-            if not verification.in_band(self.group_name, self.group_band_db):
-                failures.append(
-                    f"group {self.group_name}: "
-                    f"{verification.achieved_group_offsets_db[self.group_name]:+.2f} dB is outside "
-                    f"the channel band {list(self.group_band_db)}")
+        if self.principal_role:
+            achieved = verification.achieved_offsets_db.get(self.principal_role)
+            low, high = self.principal_band_db
+            if achieved is None:
+                failures.append(f"{self.principal_role}: not re-measured")
+            elif not low - tol <= achieved <= high + tol:
+                failures.append(f"{self.principal_role}: {achieved:+.2f} dB from the reference "
+                                f"is outside the channel band [{low}, {high}]")
+        for g in self.groups:
+            if g.name in verification.achieved_group_offsets_db:
+                if not verification.in_band(g.name, g.band_db):
+                    failures.append(
+                        f"group {g.name}: "
+                        f"{verification.achieved_group_offsets_db[g.name]:+.2f} dB is outside "
+                        f"the channel band {list(g.band_db)}")
         return failures
 
     # ---- recording ----------------------------------------------------------
@@ -759,12 +876,13 @@ class ChannelMix:
             "block_sha256": self.block_sha256,
             "reference_role": self.reference_role,
             "master_target_lufs": self.master_target_lufs,
-            "water": {"role": self.water_role, "offset_db": self.water_offset_db,
-                      "band_db": list(self.water_band_db),
-                      "treatment_af": self.water_treatment_af},
-            "supporting_group": None if not self.group_name else {
-                "name": self.group_name, "offset_db": self.group_offset_db,
-                "band_db": list(self.group_band_db), "members": dict(self.members)},
+            "principal": None if not self.principal_role else {
+                "role": self.principal_role, "offset_db": self.principal_offset_db,
+                "band_db": list(self.principal_band_db),
+                "treatment_af": self.principal_treatment_af},
+            "supporting_group": None if not self.supporting_group
+            else self.supporting_group.to_metadata(),
+            "detail_group": None if not self.detail_group else self.detail_group.to_metadata(),
             "approved": dict(self.approved),
         }
 
@@ -784,8 +902,10 @@ def channel_mix_from_brand(brand_text: str, *, source: Optional[str] = None) -> 
 
     Raises `ChannelMixError` when the block is missing or duplicated, has an
     unknown or missing key, a band that is inverted or out of range, an
-    offset outside its own band, a non-positive or duplicated member, or a
-    role used twice. Nothing is defaulted.
+    offset outside its own band, a non-positive or duplicated member, a role
+    used twice, or a group set louder than the principal layer. Nothing is
+    defaulted. ``principal`` may be absent (a channel with no principal
+    environment layer) and may be spelt ``water`` (the original spelling).
     """
     import yaml
 
@@ -798,8 +918,10 @@ def channel_mix_from_brand(brand_text: str, *, source: Optional[str] = None) -> 
         data = yaml.safe_load(block)
     except yaml.YAMLError as exc:
         raise ChannelMixError(f"the channel-mix block is not valid YAML: {exc}") from exc
-    data = _exact_keys(data, _TOP_KEYS, {"reference_role", "master_target_lufs", "water"},
-                       "channel-mix")
+    data = _exact_keys(data, _TOP_KEYS, {"reference_role", "master_target_lufs"}, "channel-mix")
+    if "principal" in data and "water" in data:
+        raise ChannelMixError("channel-mix states both principal and water; water is the old "
+                              "spelling of principal - keep one")
     reference = data["reference_role"]
     if not isinstance(reference, str) or not reference.strip():
         raise ChannelMixError("reference_role must be a role name")
@@ -807,34 +929,37 @@ def channel_mix_from_brand(brand_text: str, *, source: Optional[str] = None) -> 
     if not _MASTER_LIMITS_LUFS[0] <= master <= _MASTER_LIMITS_LUFS[1]:
         raise ChannelMixError(f"master_target_lufs {master} is outside {_MASTER_LIMITS_LUFS}")
 
-    water = _exact_keys(data["water"], _WATER_KEYS, {"role", "offset_db", "band_db"}, "water")
-    water_offset = _number(water["offset_db"], "water.offset_db")
-    water_band = _band(water["band_db"], water_offset, "water")
-    treatment = water.get("treatment_af")
-    if treatment is not None and (not isinstance(treatment, str) or not treatment.strip()):
-        raise ChannelMixError("water.treatment_af must be an FFmpeg filter string when given")
+    principal_role = principal_offset = principal_band = treatment = None
+    principal_data = data.get("principal", data.get("water"))
+    if principal_data is not None:
+        principal = _exact_keys(principal_data, _PRINCIPAL_KEYS, {"role", "offset_db", "band_db"},
+                                "principal")
+        principal_role = str(principal["role"])
+        principal_offset = _number(principal["offset_db"], "principal.offset_db")
+        principal_band = _band(principal["band_db"], principal_offset, "principal")
+        treatment = principal.get("treatment_af")
+        if treatment is not None and (not isinstance(treatment, str) or not treatment.strip()):
+            raise ChannelMixError("principal.treatment_af must be an FFmpeg filter string "
+                                  "when given")
 
-    group_name = group_offset = group_band = None
-    members: dict[str, float] = {}
-    if data.get("supporting_group") is not None:
-        group = _exact_keys(data["supporting_group"], _GROUP_KEYS, _GROUP_KEYS,
-                            "supporting_group")
-        group_name = str(group["name"])
-        group_offset = _number(group["offset_db"], "supporting_group.offset_db")
-        group_band = _band(group["band_db"], group_offset, "supporting_group")
-        if not isinstance(group["members"], Mapping) or not group["members"]:
-            raise ChannelMixError("supporting_group.members must name at least one role")
-        for role, weight in group["members"].items():
-            weight = _number(weight, f"supporting_group.members.{role}")
-            if weight <= 0:
-                raise ChannelMixError(f"member weight for {role!r} must be positive")
-            members[str(role)] = weight
-        if group_offset > water_offset:
-            raise ChannelMixError(
-                f"the supporting group ({group_offset} dB) is set louder than the principal "
-                f"water ({water_offset} dB); the block is inconsistent")
+    groups: list[GroupMix] = []
+    for key in ("supporting_group", "detail_group"):
+        if data.get(key) is not None:
+            group = _group(data[key], key)
+            if principal_offset is not None and group.offset_db > principal_offset:
+                raise ChannelMixError(
+                    f"the {key} ({group.offset_db} dB) is set louder than the principal "
+                    f"layer ({principal_offset} dB); the block is inconsistent")
+            groups.append(group)
+    if data.get("detail_group") is not None and data.get("supporting_group") is None:
+        raise ChannelMixError("a detail_group needs a supporting_group above it")
+    names = [g.name for g in groups]
+    if len(set(names)) != len(names):
+        raise ChannelMixError(f"group name used twice: {names}")
 
-    roles = [reference, water["role"], *members]
+    roles = [reference] + ([principal_role] if principal_role else [])
+    for g in groups:
+        roles.extend(g.members)
     duplicates = sorted({r for r in roles if roles.count(r) > 1})
     if duplicates:
         raise ChannelMixError(f"role(s) used more than once: {duplicates}")
@@ -850,9 +975,9 @@ def channel_mix_from_brand(brand_text: str, *, source: Optional[str] = None) -> 
 
     return ChannelMix(
         reference_role=reference, master_target_lufs=master,
-        water_role=str(water["role"]), water_offset_db=water_offset, water_band_db=water_band,
-        water_treatment_af=treatment, group_name=group_name, group_offset_db=group_offset,
-        group_band_db=group_band, members=members, approved=dict(approved),
+        principal_role=principal_role, principal_offset_db=principal_offset,
+        principal_band_db=principal_band, principal_treatment_af=treatment,
+        groups=tuple(groups), approved=dict(approved),
         block_sha256=hashlib.sha256(block.encode("utf-8")).hexdigest(),
         source=source,
         source_sha256=hashlib.sha256(brand_text.encode("utf-8")).hexdigest(),
@@ -889,10 +1014,11 @@ def check_mix_record(edit_decisions: Mapping[str, Any], mix: ChannelMix) -> list
     roles = record.get("roles") or {}
     present = [r for r in roles]
     try:
+        spec = mix.spec(present)
         expected = solve_balance(
-            mix.spec(present), {r: v["built_stem_lufs"] for r, v in roles.items()},
-            water_role=mix.water_role, water_band=mix.water_band_db,
-            group_bands={mix.group_name: mix.group_band_db} if mix.group_name else None)
+            spec, {r: v["built_stem_lufs"] for r, v in roles.items()},
+            principal_role=mix.principal_role, principal_band=mix.principal_band_db,
+            group_bands={n: b for n, b in mix.group_bands.items() if n in spec.groups} or None)
         for role, plan in expected.roles.items():
             got = roles.get(role, {}).get("offset_from_reference_db")
             if got is None or abs(got - round(plan.offset_from_reference_db, 2)) > 0.05:
@@ -907,7 +1033,6 @@ def check_mix_record(edit_decisions: Mapping[str, Any], mix: ChannelMix) -> list
         blockers.append("the verified mix is outside the channel's bands: "
                         + "; ".join(record["channel_band_failures"]))
     return blockers
-
 
 def _main(argv: list[str]) -> int:
     """Measure stems given on the command line."""

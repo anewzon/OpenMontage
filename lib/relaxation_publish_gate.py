@@ -166,8 +166,16 @@ def _generated_provenance(project_dir: Path, asset: Mapping[str, Any]) -> Option
 
 
 def licence_report(project_dir: Path, asset_manifest: Mapping[str, Any],
-                   edit_decisions: Mapping[str, Any]) -> dict[str, Any]:
-    """Blockers for every used asset without verified licence or provenance evidence."""
+                   edit_decisions: Mapping[str, Any], *,
+                   channel_root: Optional[str | Path] = None) -> dict[str, Any]:
+    """Blockers for every used asset without verified licence or provenance evidence.
+
+    Channel-owned overlays the edit uses (``metadata.overlays[]``) are
+    reusable brand assets: their evidence lives once, in the channel's
+    ``brand_assets/PROVENANCE.md`` (`lib.channel_overlay.provenance_for`),
+    never copied into each project. Missing evidence blocks exactly as a
+    missing receipt does; nothing is assumed.
+    """
     project_dir = Path(project_dir)
     assets = list(asset_manifest.get("assets") or [])
     evidence = (asset_manifest.get("metadata") or {}).get("licence_evidence") or {}
@@ -214,6 +222,22 @@ def licence_report(project_dir: Path, asset_manifest: Mapping[str, Any],
         else:
             blockers.append(f"{asset_id}: source_tool {tool!r} has no recognised provenance "
                             "evidence")
+    overlays = ((edit_decisions.get("metadata") or {}).get("overlays") or [])
+    for record in overlays:
+        from lib.channel_overlay import provenance_for
+
+        asset_rel = str(record.get("asset") or "")
+        root = channel_root or record.get("channel_root")
+        key = f"overlay:{record.get('id')}"
+        if not asset_rel or not root:
+            blockers.append(f"{key}: the edit records a channel overlay without its asset or "
+                            "channel folder - provenance unknown")
+            continue
+        ok, why = provenance_for(root, asset_rel)
+        if why:
+            blockers.append(f"{key}: {why}")
+        else:
+            verified[key] = ok
     unused = sorted(str(a["id"]) for a in assets if str(a["id"]) not in used_ids)
     return {"passed": not blockers, "blockers": blockers, "verified": verified,
             "used_assets": sorted(used_ids), "unused_alternates": unused}
@@ -242,7 +266,8 @@ def assess_publish_readiness(
     final = Path(final_path) if final_path else project_dir / "output" / "final.mp4"
     blockers: list[str] = []
 
-    licences = licence_report(project_dir, asset_manifest, edit_decisions)
+    licences = licence_report(project_dir, asset_manifest, edit_decisions,
+                              channel_root=Path(channel_brand).parent)
     blockers += [f"licence: {b}" for b in licences["blockers"]]
 
     try:

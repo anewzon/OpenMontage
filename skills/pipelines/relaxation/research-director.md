@@ -68,7 +68,9 @@ is worse than an honest gap.
 Competitors reveal **demand and patterns**. They are not a menu to reorder.
 
 "Long slow forest-river pieces at sleep length are in demand, and nobody in this
-set covers dawn mist specifically" is a finding you can act on. "Competitor X's
+set covers dawn mist specifically" is a finding you can act on; so is "every
+scenic-drive channel films the same three highways and none has shown the
+old river towns" for a location-led channel. "Competitor X's
 *Autumn River 8 Hours* did well, so make *Autumn River 8 Hours*" is not research,
 it is plagiarism with extra steps.
 

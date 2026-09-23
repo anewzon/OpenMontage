@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SKILLS = ROOT / "skills"
 RELAX = SKILLS / "pipelines" / "relaxation"
 MANIFEST = ROOT / "pipeline_defs" / "relaxation.yaml"
-OPENING_TSX = ROOT / "remotion-composer" / "src" / "RiverFlowOpening.tsx"
+OPENING_TSX = ROOT / "remotion-composer" / "src" / "ScenicOpening.tsx"
 ROOT_TSX = ROOT / "remotion-composer" / "src" / "Root.tsx"
 
 HAS_FFMPEG = shutil.which("ffmpeg") is not None and shutil.which("ffprobe") is not None
@@ -290,7 +290,7 @@ def test_edit_director_forbids_counting_overlap_as_coverage():
 def test_opening_exposes_three_independent_text_elements():
     src = OPENING_TSX.read_text(encoding="utf-8")
     for prop in ("brandSignature", "welcomeMessage", "episodeLine"):
-        assert prop in src, f"RiverFlowOpening must expose {prop}"
+        assert prop in src, f"ScenicOpening must expose {prop}"
     assert "wordmark" not in src, (
         "the single-wordmark prop was replaced by an explicit hierarchy")
 
@@ -309,7 +309,8 @@ def test_opening_message_is_larger_than_the_brand_signature():
 
 def test_opening_registered_with_hierarchy_defaults():
     src = ROOT_TSX.read_text(encoding="utf-8")
-    assert "RiverFlowOpening" in src
+    assert "ScenicOpening" in src
+    assert "RiverFlowOpening" in src, "the original composition id stays registered as an alias"
     assert "brandSignature" in src and "welcomeMessage" in src
 
 

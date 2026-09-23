@@ -164,3 +164,28 @@ def test_the_executive_producer_carries_the_defect_rule():
     assert "platform defect -> checkpoint the current project -> report the defect -> stop" in text
     assert "Never patch the engine during a production run" in text
     assert "record_platform_defect(" in text
+
+
+def test_every_channel_policy_file_and_reference_folder_is_frozen(root):
+    """The five channel files and the thumbnail references are policy: read-only in production."""
+    channel = root.parent / "Channels" / "channel_9999"
+    for name in ("COMPETITORS.md", "RESEARCH.md", "THUMBNAIL.md", "METADATA.md"):
+        (channel / name).write_text(f"# {name}\n")
+    (channel / "thumbnail_refs" / "approved").mkdir(parents=True)
+    (channel / "thumbnail_refs" / "approved" / "own.jpg").write_bytes(b"jpg")
+    (channel / "brand_assets").mkdir()
+    (channel / "brand_assets" / "logo.png").write_bytes(b"png")
+    pm.enable(root, operator="operator")
+    frozen = {p.relative_to(channel).as_posix() for p in pm.protected_files(root)
+              if channel in p.parents}
+    assert frozen >= {"BRAND.md", "COMPETITORS.md", "RESEARCH.md", "THUMBNAIL.md", "METADATA.md",
+                      "thumbnail_refs/approved/own.jpg", "brand_assets/logo.png"}
+    for name in ("BRAND.md", "THUMBNAIL.md", "METADATA.md"):
+        with pytest.raises(PermissionError):
+            (channel / name).write_text("edited during production\n")
+    # A project's own folder stays writable: policy is read, videos are made.
+    project = root / "projects" / "channel_9999__video_0001"
+    (project / "work").mkdir(exist_ok=True)
+    (project / "work" / "note.txt").write_text("fine\n")
+    rules = pm.settings_rules()["workspace"]["deny"]
+    assert "Edit(/Channels/**)" in rules

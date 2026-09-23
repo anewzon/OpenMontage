@@ -659,21 +659,21 @@ class TestChannelOpeningIsBinding:
         )
         assert "largest" in low
 
-    def test_riverflow_composition_exposes_three_independent_roles(self) -> None:
+    def test_scenic_opening_composition_exposes_three_independent_roles(self) -> None:
         """The composition must accept the hierarchy as separate props."""
-        source = ROOT / "remotion-composer" / "src" / "RiverFlowOpening.tsx"
+        source = ROOT / "remotion-composer" / "src" / "ScenicOpening.tsx"
         if not source.is_file():
-            pytest.skip("RiverFlowOpening.tsx not present")
+            pytest.skip("ScenicOpening.tsx not present")
         text = source.read_text(encoding="utf-8")
         for role in ("brandSignature", "welcomeMessage", "episodeLine"):
-            assert role in text, f"RiverFlowOpening has no {role} prop"
+            assert role in text, f"ScenicOpening has no {role} prop"
         assert "videoSrc" in text, "the opening has no footage bed prop"
 
     def test_episode_copy_is_not_hardcoded_into_the_composition(self) -> None:
         """"Flow Into Calm" may be a default; it must not be the only value."""
-        source = ROOT / "remotion-composer" / "src" / "RiverFlowOpening.tsx"
+        source = ROOT / "remotion-composer" / "src" / "ScenicOpening.tsx"
         if not source.is_file():
-            pytest.skip("RiverFlowOpening.tsx not present")
+            pytest.skip("ScenicOpening.tsx not present")
         text = source.read_text(encoding="utf-8")
         assert "Flow Into Calm" not in text, (
             "episode copy must come from props, not be baked into the component"
@@ -869,7 +869,7 @@ class TestOpeningCanvasSafeguard:
         assert "a mismatch is a blocker" in focus
 
     def test_opening_composition_fails_instead_of_falling_back(self):
-        src = (ROOT / "remotion-composer" / "src" / "RiverFlowOpening.tsx").read_text(
+        src = (ROOT / "remotion-composer" / "src" / "ScenicOpening.tsx").read_text(
             encoding="utf-8")
         assert "Fall back to 1080p if the bed cannot be probed" not in src
         assert "could not read its bed" in src and "throw new Error" in src

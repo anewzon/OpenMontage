@@ -228,7 +228,7 @@ def remotion_render_args(contract: DeliveryContract) -> list[str]:
     """Remotion CLI flags for an opening at the delivery standard.
 
     The canvas itself is passed as the composition's ``width``/``height``/``fps``
-    props (see RiverFlowOpening); these flags fix the encode. The result is
+    props (see ScenicOpening); these flags fix the encode. The result is
     still conformed and compared before it is joined - a flag is not proof.
     """
     return ["--codec=h264", "--pixel-format=yuv420p", "--color-space=bt709", "--crf=16"]

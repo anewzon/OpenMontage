@@ -152,7 +152,8 @@ Read `edit_decisions.metadata.opening`. When `required: true`:
 
    ```python
    from lib.delivery_qc import render_opening
-   render_opening(composer_dir="remotion-composer", composition="RiverFlowOpening",
+   render_opening(composer_dir="remotion-composer",
+                  composition=edit_decisions["metadata"]["opening"]["composition"],
                   props=opening_props, output="work/opening.mp4", contract=contract)
    ```
 
@@ -161,9 +162,10 @@ Read `edit_decisions.metadata.opening`. When `required: true`:
    `yuv420p` / BT.709 flags, and conforms the result. video_0003's opening,
    rendered without them, came out `yuvj420p`, full range, BT.601.
 2. **Inspect the rendered frames.** Sample them with `frame_sampler` and look:
-   confirm all three text roles are present and ranked as the channel's
-   `BRAND.md` asks, and that the bed is the footage `BRAND.md` asks for, taken
-   from this episode's own pool.
+   confirm every text role the channel's `channel-policy` `opening.text_roles`
+   names is present and ranked as its `BRAND.md` asks, and that the bed is
+   what `opening.bed` asks for (moving water, a skyline, canopy light, a
+   hearth), taken from this episode's own pool.
 3. **Match the format — a mismatch is a blocker.**
    `lib.delivery_qc.compare_segments(opening, body, contract)` must return `[]`:
    width, height, fps, pixel format, colour primaries / transfer / matrix /
@@ -302,6 +304,29 @@ boundary that measures correctly can still look wrong.
 **Inspect every chunk boundary and every approved critical transition.** Sample
 the rest.
 
+## Channel overlays: composite from the record (binding)
+
+For every `edit_decisions.metadata.overlays[]` record, burn the overlay into
+**the piece that contains its window** - the chunk, or the body for a short
+piece - before assembly, so the rest of the film stays stream-copied:
+
+```python
+from lib.channel_overlay import composite_overlay, overlay_qc
+record = composite_overlay(chunk_in, chunk_out, record, contract,
+                           piece_offset_seconds=chunk_start_seconds)
+```
+
+It re-checks the asset's hash against the record, scales to the recorded
+region only (proportions fixed at the edit), maps only the piece's own
+audio - the overlay's audio never enters the programme - encodes at the
+delivery contract and measures its own effect (`evidence`). Write the
+extended record back into `edit_decisions.metadata.overlays[]`. After the
+master exists, `overlay_qc(final, records, contract, expected_ids=[declared
+ids])` goes under `render_report.metadata.qc.overlays`; a blocker there (an
+omitted overlay, no evidence, off-frame, off-proportion, mapped audio, a
+second audio stream) fails the stage exactly as a `delivery_qc` blocker
+does. A channel with no overlays gets an empty passing report.
+
 ## QC — editorial
 
 The technical pass says the file is valid. This one says it is worth watching.
@@ -312,13 +337,15 @@ Sample across the finished video and answer honestly:
   shots?** Re-measure a sample with `lib.camera_motion` rather than trusting
   the manifest.
 - **is there aerial or moving-camera footage where the concept promised it?**
-- **ASMR-loop dominance** — long runs of stationary water close-ups?
+- **ASMR-loop dominance** — long runs of similar stationary close-ups, where
+  the channel does not allow static composition?
 - **coherent season, light and environment** across the film, and consistent
   with the concept?
 - visual progression and shot diversity across movements?
 - poor shot choices, or shots that should have been rejected at `assets`?
-  (The second test passed a road/causeway shot and a shot whose primary
-  subject is a person — both avoid-by-default in `BRAND.md`.)
+  (One channel's second test passed a road/causeway shot and a shot whose
+  primary subject is a person — both on that channel's avoid-list. Another
+  channel lists roads as primary; the list is always the channel's.)
 - jarring transitions, or dissolves between unrelated subjects?
 - sequences that read as repeated?
 - ambience mismatched to the visible environment?
@@ -350,9 +377,10 @@ Consistent with the channel's `BRAND.md`, and still distinct from the channel's
 previous uploads. A video that satisfies the brand by being identical to the
 last one has failed this check.
 
-**If `BRAND.md` requires an opening, verify it is actually in the delivered
-file** — the right duration, the three text roles present and correctly ranked,
-moving-water bed, audio continuous into the body. **A missing required opening
+**If the channel's `channel-policy` requires an opening, verify it is actually
+in the delivered file** — the right duration, the channel's text roles present
+and correctly ranked, the bed its policy names, audio continuous into the
+body. **A missing required opening
 is a stage failure**, recorded in `metadata.qc.brand`, not a warning.
 
 This is editorial quality, **not** an attempt to influence monetisation systems,

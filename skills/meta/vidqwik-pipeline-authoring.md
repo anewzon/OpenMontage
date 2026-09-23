@@ -42,7 +42,7 @@ Apply the decision-promotion rule from `ARCHITECTURE.md` §C:
 | Applies to… | Goes in… |
 |---|---|
 | one video | project artifacts / checkpoints |
-| one channel | `BRAND.md` · `COMPETITORS.md` · `RESEARCH.md` |
+| one channel | `BRAND.md` · `COMPETITORS.md` · `RESEARCH.md` · `THUMBNAIL.md` · `METADATA.md` |
 | one format or niche | that pipeline's Director skills |
 | several pipelines | an OpenMontage meta skill |
 | VidQwik itself | `ARCHITECTURE.md` |
@@ -131,8 +131,13 @@ No code is normally needed:
 
 1. Assign the next permanent `channel_NNNN` ID.
 2. Choose an existing appropriate pipeline.
-3. Create `Channels\channel_NNNN\` with `BRAND.md`, `COMPETITORS.md`,
-   `RESEARCH.md`, `assets\branding\`.
+3. Create `Channels\channel_NNNN\` with the five policy files `BRAND.md`,
+   `COMPETITORS.md`, `RESEARCH.md`, `THUMBNAIL.md`, `METADATA.md` and the
+   folders `brand_assets\`, `thumbnail_refs\competitors\`,
+   `thumbnail_refs\approved\` (`lib.channel_policy.load_channel` validates).
+   A channel-owned persistent overlay (subscribe animation, logo, corner bug)
+   is declared in the channel-policy `overlays:` list and its provenance in
+   `brand_assets\PROVENANCE.md`; `lib.channel_overlay` does the rest, generically.
 4. Write the brand and strategy; add a row to `Channels\CHANNELS.md`.
 
 If a new channel seems to require code, re-read §D of `ARCHITECTURE.md` — it

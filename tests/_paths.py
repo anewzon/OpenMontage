@@ -21,3 +21,8 @@ def channel_brand(channel_id: str = "channel_0001") -> Path:
         if candidate.is_file():
             return candidate
     return ROOT.parent / "Channels" / channel_id / "BRAND.md"
+
+
+def channel_dir(channel_id: str = "channel_0001") -> Path:
+    """Path to a channel's folder (possibly absent: callers skip on that)."""
+    return channel_brand(channel_id).parent

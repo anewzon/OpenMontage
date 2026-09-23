@@ -447,10 +447,13 @@ class TestTransitionsSurviveIntoTheRender:
 class TestMusicLedMixIsRequiredByTheGates:
     def test_edit_gate_requires_a_music_led_mix(self, manifest: dict) -> None:
         focus = _focus(manifest, "edit")
-        assert "music-led" in focus
+        assert "reference-led" in focus, (
+            "the edit gate anchors the mix on the channel's reference_role (music for a "
+            "music-led channel) - never on a layer the pipeline picks"
+        )
         assert "not mixed as its peer" in focus, (
-            "the edit gate must reject water mixed at parity with the music - "
-            "the exact Test 2 defect"
+            "the edit gate must reject the principal environment mixed at parity with "
+            "the reference - the exact Test 2 defect (water at parity with the music)"
         )
         assert "combined group" in focus
 

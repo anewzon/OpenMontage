@@ -37,6 +37,14 @@ import pytest
 from lib import paid_call_guard
 from lib.ambience_loop import build_loop_bed, seam_report
 from lib.camera_motion import analyse_clip
+from lib.channel_overlay import (
+    OverlayError,
+    composite_overlay,
+    overlay_qc,
+    resolve_overlays,
+    schedule_overlay,
+)
+from lib.channel_policy import load_channel
 from lib.checkpoint import get_next_stage, read_checkpoint, write_checkpoint
 from lib.delivery_qc import (
     DeliveryContract,
@@ -56,6 +64,7 @@ from lib.relaxation_policy import (
     record_music_review,
     record_sfx_review,
 )
+from lib.relaxation_publish_gate import licence_report
 from lib.relaxation_publish_gate import (
     approve_publish,
     assess_publish_readiness,
@@ -77,7 +86,8 @@ from tools.cost_tracker import ApprovalRequiredError
 pytestmark = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
 
 ROOT = Path(__file__).resolve().parents[2]
-BRAND = ROOT / "tests" / "fixtures" / "relaxation" / "channels" / "reference_v7a_BRAND.md"
+CHANNEL = ROOT / "tests" / "fixtures" / "relaxation" / "channels" / "river_flow"
+BRAND = CHANNEL / "BRAND.md"
 COMPOSER = ROOT / "remotion-composer"
 FOUR_K = os.environ.get("VIDQWIK_E2E_4K") == "1"
 W, H = (3840, 2160) if FOUR_K else (1280, 720)
@@ -150,6 +160,9 @@ def sim(tmp_path_factory):
 
 
 def _run(base, projects, project, media, report, http_posts):
+    # The channel contract is read once, at runtime, from its five files.
+    channel = load_channel(CHANNEL, expected_id="channel_0001")
+    report["channel"] = channel.to_metadata()
     from lib.checkpoint import init_project
 
     init_project(PROJECT_ID, title="Zero-spend simulation", pipeline_type="relaxation",
@@ -200,7 +213,8 @@ def _run(base, projects, project, media, report, http_posts):
         "delivery_canvas": {"width": W, "height": H, "fps": 30, "pix_fmt": "yuv420p",
                             "codec": "h264",
                             "audio": "aac 48 kHz stereo, -16 LUFS, true peak <= -1.5 dBTP"},
-        "opening": {"required": True, "composition": "RiverFlowOpening", "runtime": "remotion"}}
+        "opening": {"required": True, "composition": channel.policy.opening.composition,
+                    "runtime": "remotion", "bed": channel.policy.opening.bed}}
     approve(projects, "proposal", {"proposal_packet": packet})
     contract = DeliveryContract.from_proposal(packet)
     report["stages"]["proposal"] = {"approved_budget_usd": 2.0,
@@ -374,7 +388,7 @@ def _run(base, projects, project, media, report, http_posts):
         beds[role] = {**bed, "seams": seam_report(bed["path"], bed["seam_seconds"])}
     mix = channel_mix_from_file(BRAND)
     stems = work / "stems"
-    ff("-i", beds["A2-water"]["path"], "-af", mix.water_treatment_af,
+    ff("-i", beds["A2-water"]["path"], "-af", mix.principal_treatment_af,
        str(stems / "A2-water.wav"))
     ff("-i", beds["A4-forest"]["path"], str(stems / "A4-forest.wav"))
     ff("-i", str(audio_dir / "birds_a.mp3"), "-i", str(audio_dir / "birds_b.mp3"),
@@ -416,6 +430,12 @@ def _run(base, projects, project, media, report, http_posts):
                 {"role": "A4-forest", "beds": [{"asset_id": "sfx_forest_bed"}]}],
             "mix_balance": mix.record(plan_mix, verification),
             "loop_seams": {r: b["seams"] for r, b in beds.items()},
+            # The channel's declared overlays, resolved and scheduled from THIS
+            # episode. This channel declares none, so none is recorded.
+            "overlays": [
+                schedule_overlay(r, runtime_seconds=SECONDS, opening_seconds=OPENING,
+                                 slots=scenes["scenes"], frame=(W, H))
+                for r in resolve_overlays(channel.policy.overlays, channel.root, frame=(W, H))],
         }}
     write_checkpoint(projects, PROJECT_ID, "edit", "awaiting_human", {"edit_decisions": edit},
                      human_approval_required=True)
@@ -494,7 +514,7 @@ def _run(base, projects, project, media, report, http_posts):
         ff("-ss", "2", "-t", str(OPENING), "-i", str(clips["RIVER1"]), "-an", "-c:v", "libx264",
            "-preset", "ultrafast", "-pix_fmt", "yuv420p", str(staged))
         rendered = render_opening(
-            composer_dir=COMPOSER, composition="RiverFlowOpening", output=opening,
+            composer_dir=COMPOSER, composition=channel.policy.opening.composition, output=opening,
             contract=contract,
             props={"videoSrc": "sim/bed.mp4", "brandSignature": "Test Channel",
                    "welcomeMessage": "FOLLOW THE WATER", "episodeLine": "a simulated stream",
@@ -533,6 +553,75 @@ def _run(base, projects, project, media, report, http_posts):
                            "duration_seconds": qc["measurements"]["duration_seconds"]}],
               "metadata": {"qc": {"technical": qc}}}
     write_checkpoint(projects, PROJECT_ID, "compose", "completed", {"render_report": render})
+
+    # ---- channel overlays: none for this channel; the mechanism proven beside it ----
+    river_overlay_qc = overlay_qc(final, edit["metadata"]["overlays"], contract,
+                                  expected_ids=[o.id for o in channel.policy.overlays])
+    overlay_root = base / "VidQwik AI" / "Channels" / "channel_9998"
+    shutil.copytree(CHANNEL.parent / "unseen_america", overlay_root)
+    brand_path = overlay_root / "BRAND.md"
+    brand_text = brand_path.read_text(encoding="utf-8").replace(
+        "channel_id: channel_0002", "channel_id: channel_9998").replace(
+        "```\n\n## Channel mix settings",
+        "overlays:\n  - id: badge\n    enabled: true\n"
+        "    asset: brand_assets/overlays/badge.mov\n    purpose: subscribe CTA\n"
+        "    usage: once_per_video\n    placement: bottom_right\n    scale: 0.22\n"
+        "```\n\n## Channel mix settings")
+    brand_path.write_text(brand_text, encoding="utf-8")
+    badge = overlay_root / "brand_assets" / "overlays" / "badge.mov"
+    badge.parent.mkdir(parents=True, exist_ok=True)
+    ff("-f", "lavfi", "-i", "color=c=red:s=240x90:r=30:d=3,format=rgba,"
+       "pad=320:180:40:45:color=black@0.0", "-f", "lavfi", "-i",
+       "sine=frequency=1000:duration=3", "-c:v", "prores_ks", "-profile:v", "4444",
+       "-pix_fmt", "yuva444p10le", "-c:a", "pcm_s16le", str(badge))
+    other = load_channel(overlay_root, expected_id="channel_9998")
+    resolved = resolve_overlays(other.policy.overlays, other.root, frame=(W, H))
+    overlay_record = schedule_overlay(resolved[0], runtime_seconds=SECONDS,
+                                      opening_seconds=OPENING, slots=[
+        {**sc, "shot_scale": "wide", "subject_motion": "gentle"} for sc in scenes["scenes"]],
+        frame=(W, H))
+    overlay_body = work / "body_with_overlay.mp4"
+    overlay_record = composite_overlay(body, overlay_body, overlay_record, contract)
+    lst = work / "overlay_final.txt"
+    lst.write_text(f"file '{opening.as_posix()}'\nfile '{overlay_body.as_posix()}'\n")
+    joined = work / "overlay_final_picture.mp4"
+    ff("-f", "concat", "-safe", "0", "-i", str(lst), "-c", "copy", str(joined))
+    overlay_final = work / "overlay_final.mp4"
+    ff("-i", str(joined), "-i", str(work / "mix.wav"), "-map", "0:v", "-map", "1:a",
+       "-c:v", "copy", "-c:a", "aac", "-b:a", "320k", "-ar", "48000", "-ac", "2",
+       "-movflags", "+faststart", str(overlay_final))
+    overlay_delivery = delivery_qc(overlay_final, contract, opening=opening, body=overlay_body)
+    other_qc = overlay_qc(overlay_final, [overlay_record], contract, expected_ids=["badge"])
+    overlay_edit = {"cuts": [], "metadata": {"overlays": [overlay_record]}}
+    unproven = licence_report(project, {"assets": []}, overlay_edit, channel_root=other.root)
+    (other.root / "brand_assets" / "PROVENANCE.md").write_text(
+        "# Provenance\n\n```channel-provenance\noverlays/badge.mov:\n"
+        "  licence: made in-house (simulated)\n  source: fixture\n"
+        "  verified_by: operator (simulated)\n  date: 2026-09-23\n```\n", encoding="utf-8")
+    proven = licence_report(project, {"assets": []}, overlay_edit, channel_root=other.root)
+    badge.unlink()
+    try:
+        resolve_overlays(other.policy.overlays, other.root, frame=(W, H))
+        missing_asset = "ALLOWED"
+    except OverlayError as exc:
+        missing_asset = f"stopped: {exc}"[:120]
+    report["stages"]["overlays"] = {
+        "this_channel_declared": len(channel.policy.overlays),
+        "this_channel_records": edit["metadata"]["overlays"],
+        "this_channel_qc_passed": river_overlay_qc["passed"],
+        "other_channel": {
+            "declared": [o.id for o in other.policy.overlays],
+            "media": resolved[0].media.to_metadata(),
+            "record": {k: overlay_record[k] for k in ("id", "start_seconds", "end_seconds",
+                                                       "region", "slot_id", "audio",
+                                                       "rationale")},
+            "evidence": overlay_record["evidence"],
+            "overlay_qc_passed": other_qc["passed"], "overlay_qc_blockers": other_qc["blockers"],
+            "delivery_qc_passed": overlay_delivery["passed"],
+            "delivery_qc_blockers": overlay_delivery["blockers"],
+            "provenance_missing_blockers": unproven["blockers"],
+            "provenance_verified": proven["verified"],
+            "missing_asset": missing_asset}}
 
     # ---- publish gate: first with a receipt missing, then complete ------------
     gate_kwargs = dict(proposal_packet=packet, asset_manifest=manifest, edit_decisions=edit,
@@ -635,6 +724,27 @@ def test_the_mix_is_the_channel_block_and_the_seams_are_clean(sim):
     assert mix["channel_band_failures"] == []
     assert mix["achieved_offsets_db"]["A2-water"] == pytest.approx(-29.0, abs=0.5)
     assert all(mix["seams_passed"].values())
+
+
+def test_this_channel_has_no_overlay_and_the_mechanism_works_for_one_that_does(sim):
+    ov = sim["report"]["stages"]["overlays"]
+    assert ov["this_channel_declared"] == 0 and ov["this_channel_records"] == []
+    assert ov["this_channel_qc_passed"]
+    other = ov["other_channel"]
+    assert other["declared"] == ["badge"]
+    assert other["media"]["has_alpha_plane"] and other["media"]["alpha_varies"]
+    assert other["media"]["audio_streams"] == 1 and other["record"]["audio"] == "excluded"
+    assert other["evidence"]["output_audio_streams"] == 0   # the body carries no audio
+    assert other["evidence"]["frame_diff_inside_window"] > \
+        3 * other["evidence"]["frame_diff_outside_window"]
+    assert OPENING < other["record"]["start_seconds"] and \
+        other["record"]["end_seconds"] <= SECONDS - 5
+    assert other["overlay_qc_passed"], other["overlay_qc_blockers"]
+    assert other["delivery_qc_passed"], other["delivery_qc_blockers"]
+    assert other["provenance_missing_blockers"] and \
+        other["provenance_missing_blockers"][0].startswith("overlay:badge")
+    assert "overlay:badge" in other["provenance_verified"]
+    assert other["missing_asset"].startswith("stopped")
 
 
 def test_no_real_money_was_spent(sim):

@@ -839,7 +839,8 @@ def analyse_clip(
         notes.append(
             "steadiness unverified: measurement confidence is weak (fewer than two "
             f"windows with a correlation peak >= {STEADINESS_CONFIDENCE_MIN}) - typical "
-            "of frames dominated by white water; judge steadiness from the frames"
+            "of frames dominated by fine broadband texture (white water, rain, foliage, "
+            "flames); judge steadiness from the frames"
         )
 
     import numpy as np
@@ -897,7 +898,7 @@ def movement_profile(measurements: Sequence[ClipMotion]) -> dict[str, Any]:
 
     moving = [m for m in measurements if m.is_moving_camera]
     usable_moving = [m for m in measurements if m.is_relaxation_suitable_movement]
-    locked_water = [
+    locked_subject = [
         m
         for m in measurements
         if not m.is_moving_camera and m.subject_motion in ("moderate", "strong")
@@ -910,8 +911,8 @@ def movement_profile(measurements: Sequence[ClipMotion]) -> dict[str, Any]:
         "moving_camera_share": round(len(moving) / total, 3),
         "usable_moving_camera_clips": len(usable_moving),
         "usable_moving_camera_share": round(len(usable_moving) / total, 3),
-        "locked_off_moving_water_clips": len(locked_water),
-        "locked_off_moving_water_share": round(len(locked_water) / total, 3),
+        "locked_off_moving_subject_clips": len(locked_subject),
+        "locked_off_moving_subject_share": round(len(locked_subject) / total, 3),
         "distinct_camera_motions": sorted(counts),
         "loop_suspected_clips": [
             Path(m.path).name for m in measurements if m.loop_suspected

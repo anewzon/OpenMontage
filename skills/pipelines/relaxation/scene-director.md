@@ -102,7 +102,7 @@ expensive after a long encode.
 |---|---|
 | Camera-movement variety | only one or two genuinely different camera motions appear across the film |
 | Moving-camera presence | the plan is dominated by locked-off shots while the concept promised a journey |
-| Longest static run | a long stretch of consecutive locked-off shots, whatever the water is doing |
+| Longest static run | a long stretch of consecutive locked-off shots, whatever the subject is doing — unless the channel's `channel-policy` allows static composition |
 | Scale variety | one scale dominates, or scales rotate mechanically |
 | Season / light coherence | slots with incompatible season, weather or light sit together, or contradict the concept |
 | Duration pattern | holds follow a visible repeating rhythm |

@@ -1,12 +1,18 @@
 name: relaxation
 version: "2.0"
 description: >
-  Cinematic relaxation pipeline for any approved duration from 60 seconds to
-  5 hours. Suits rivers, forests, waterfalls, ocean, rain, fireplace, night
-  nature, meditation and sleep scenery, and comparable calm formats.
-  Channel-specific identity - subject priorities, look, audio balance,
-  opening and delivery canvas - lives in that channel's BRAND.md, never in
-  this pipeline. Research is web-grounded like the explainer pipeline.
+  Cinematic scenic/relaxation pipeline for any approved duration from 60
+  seconds to 5 hours: a production grammar, not a subject. It serves rivers,
+  forests, ocean, coastlines, deserts, mountains, lakes, city scenery, city
+  tours without narration, roads, landmarks, countryside, wildlife, rain,
+  night city, fireplace and comparable calm formats without a source change.
+  Channel-specific identity - subject priorities and avoid-list, look, audio
+  roles and balance, opening, thumbnail grammar, publishing language and
+  delivery canvas - lives in that channel's five policy files (BRAND.md,
+  COMPETITORS.md, RESEARCH.md, THUMBNAIL.md, METADATA.md), read at runtime
+  through lib.channel_policy, never in this pipeline. It is not a narrative
+  format: narrated documentaries, factual travel guides, crime stories and
+  presenter-led shows need their own pipeline. Research is web-grounded like the explainer pipeline.
   Procurement supports two sourcing modes chosen per project from
   proposal_packet.metadata.sourcing: licensed_manual, where a person buys and
   downloads the footage, and free_auto, where permitted free stock is acquired
@@ -234,7 +240,7 @@ stages:
       - Usable sub-ranges identified per clip, not whole-file assumptions
       - Usable ranges come from inspection, not a constant trim applied to every file
       - "CAMERA motion measured per clip and recorded SEPARATELY from subject motion"
-      - A fixed camera filming moving water is recorded as static, never as movement
+      - A fixed camera filming a moving subject (water, traffic, flames, animals) is recorded as static, never as movement
       - Camera motion, direction, speed band and steadiness recorded per clip
       - An unanalysed clip is recorded as unknown, never defaulted to static
       - Shot scale, season, weather and light recorded from sampled frames
@@ -242,7 +248,8 @@ stages:
       - A pool that cannot support the concept's promised movement is reported here
       - Season/light incoherence against the concept surfaced, not left to the edit
       - Visually repetitive near-duplicates ranked or rejected, not all admitted
-      - "BRAND.md avoid-list honoured: people as subject, roads, buildings rejected"
+      - "The channel's own avoid-list (BRAND.md channel-policy subjects.avoid) honoured; nothing rejected on a list the pipeline invented"
+      - "Subjects the channel lists as primary or allowed are never rejected for being roads, buildings, people in passing or animals"
       - Clips below the delivery canvas flagged, never silently upscaled
       - Unsuitable assets rejected with a reason rather than forced in
       - Licence evidence cross-referenced; unverified assets flagged
@@ -302,7 +309,7 @@ stages:
       - Season, weather and lighting are compatible across adjacent slots
       - Season and light are consistent with the approved concept
       - Shot durations chosen from actual visual interest, not a pattern
-      - No long run of similar stationary close-ups, even with moving water
+      - No long run of similar stationary close-ups, even when the subject moves - unless the channel allows static composition
       - Strongest footage used to establish and advance the journey
       - No prewritten movement structure forced onto footage that cannot carry it
       - No asset reused twice inside one movement
@@ -359,8 +366,8 @@ stages:
       - Audio layers declared with per-layer volume, offset and fades
       - Per-layer gains DERIVED from MEASURED BUILT STEMS, never from source means
       - Per-layer gains never left at provider default
-      - "Mix is MUSIC-LED: music is the reference layer"
-      - Water supports the music and is not mixed as its peer
+      - "Mix is REFERENCE-LED: the channel's reference_role anchors it"
+      - The principal environment layer, where the channel states one, supports the reference and is not mixed as its peer
       - "Supporting ambience assessed as a COMBINED GROUP, not per layer"
       - Short-term extremes and transients inspected, not only integrated loudness
       - Balance verified on a short representative preview mix before the full render
@@ -378,6 +385,9 @@ stages:
       - "metadata.chunk_plan[] present for any timeline over 20 minutes"
       - Short timelines are not chunked without a stated rendering reason
       - "Approved channel opening carried into metadata.opening and counted in the timeline"
+      - "Every overlay the channel declares (channel-policy overlays) resolved and inspected with lib.channel_overlay; a missing or unusable asset STOPS the stage"
+      - "Each overlay's moment chosen from THIS episode's shots (schedule_overlay) and recorded in metadata.overlays[] with the asset hash; no fixed timestamp, never over the opening or the final fade"
+      - "A channel with no declared overlay records none and is otherwise untouched"
       - Shot holds derive from duration, shot strength and role - not a fixed band
       - "metadata.audio_layers[] and metadata.mix_balance match the EXECUTED mix"
       - Every cut carries a reason that describes a decision
@@ -428,8 +438,8 @@ stages:
       - "Delivered file has EXACTLY one audio stream - the approved mix, mapped 0:v + 1:a"
       - True peak measured with ebur128 on the ENCODED file, not sample peak on the WAV
       - Final fade verified present in the delivered file by measuring tail levels
-      - Audio content reviewed - water coherence, layer balance, continuity
-      - "Mix confirmed MUSIC-LED: water supportive, not overpowering"
+      - Audio content reviewed - environment coherence with the picture, layer balance, continuity
+      - "Mix confirmed reference-led: the principal environment supportive, not overpowering, when the channel has one"
       - Supporting ambience quiet and occasional; no abrupt layer changes
       - Loudness normalisation not used to repair an unbalanced mix
       - Checks that could not actually run are declared, never recorded as passes
@@ -448,6 +458,8 @@ stages:
       - Opening canvas ffprobe-verified identical to the body (width, height, fps, pix_fmt); a mismatch is a blocker, never scaled past
       - Completed chunks preserved so a late failure resumes, never restarts
       - Audio-only corrections remuxed without re-encoding the video
+      - "Every metadata.overlays[] record composited with composite_overlay into the piece that contains its window, at the contract, the asset's own audio never mapped"
+      - "overlay_qc recorded under metadata.qc.overlays: a declared overlay that is absent, unevidenced, outside the frame or off-proportion is a blocker"
     success_criteria:
       - Schema-valid render_report artifact
       - output/final.mp4 exists and passes ffprobe validation
@@ -475,10 +487,14 @@ stages:
     human_approval_default: true
     review_focus:
       - Thumbnail candidates extracted from the finished video with frame_sampler
+      - "The channel's THUMBNAIL.md grammar, its own approved thumbnails and (as inspiration only) competitor references were read; the choice is recorded against them"
+      - "The channel's METADATA.md language and its prior uploads were read (lib.channel_policy.publish_inputs); check_packaging returned no blocker"
+      - Title, description and tags are written fresh for this video; no other channel's formula reused
       - Runs only after final.mp4 exists and passed QC
       - "Publish checkpoint written only through the gate: assess_publish_readiness + write_publish_gate; any blocker writes failed"
       - "Every asset the final edit uses has verified licence or provenance evidence; a missing receipt is a blocker, not a note"
       - "Mix verified against the channel's current channel-mix block (check_mix_record); master passes delivery_qc"
+      - "Every channel overlay the edit uses carries reusable provenance in the channel's brand_assets/PROVENANCE.md; a missing entry is a blocker, never invented"
       - Packaging describes the video actually made, not the plan
       - Title accurate, non-clickbait, not a competitor title reworded
       - Title formula differs from the channel's previous upload

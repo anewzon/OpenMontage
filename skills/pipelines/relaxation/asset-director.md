@@ -46,8 +46,14 @@ Record these as flags on the asset, and surface them to the operator:
   clip stretched to 4K looks worse than a 4K timeline with one soft shot.
 - Frame rate that is not 30 — note it; the edit director decides conform policy.
 - Visible watermark, burned-in logo, or timecode — reject, with reason.
-- People as a primary subject, cities, aggressive camera movement — reject by
-  default per BRAND.md, unless the approved proposal overrides.
+- Any subject the channel's `channel-policy` block lists under
+  `subjects.avoid` — reject by default, unless the approved proposal
+  overrides. Check with `channel.policy.subjects.verdict(<subject>)`: a
+  subject listed as primary or allowed is never rejected on the pipeline's
+  say-so (roads, buildings, traffic, animals and people in passing are
+  primary for some channels and avoided by others).
+- Aggressive camera movement — reject when the channel asks for graceful
+  movement; note it otherwise.
 - Heavy compression artefacts, rolling shutter, or exposure pumping — flag.
 
 ## 4. Find the usable sub-ranges
@@ -66,12 +72,12 @@ well-exposed and clean, and record for each range:
 
 | Field | How it is established |
 |---|---|
-| `subject` | river, canopy, ridge, rain on leaves, … |
+| `subject` | the channel's own terms — river, canopy, main street, skyline, herd, hearth, … |
 | `shot_scale` | wide / medium / detail — **from looking at frames** |
 | `camera_motion` | static / drift / pan / tilt / tracking / push_in / pull_out — **measured** |
 | `camera_direction` | left / right / up / down / in / out, or null |
 | `camera_speed_band` | still / graceful / brisk / aggressive — **measured** |
-| `camera_steadiness` | steady / slightly_unsteady / shaky — **measured**; `unverified` when `camera_measurement_confidence` is weak (frames dominated by white water): judge it from the frames, never reject it as shaky |
+| `camera_steadiness` | steady / slightly_unsteady / shaky — **measured**; `unverified` when `camera_measurement_confidence` is weak (frames dominated by fine broadband texture: white water, rain, foliage, flames): judge it from the frames, never reject it as shaky |
 | `subject_motion` | still / gentle / moderate / strong — **measured, separately** |
 | `usable_seconds` | from inspection of this clip |
 | `season` | spring / summer / autumn / winter / indeterminate — from frames |
@@ -96,9 +102,10 @@ downstream.
 
 ### Camera motion is MEASURED, and kept separate from subject motion (binding)
 
-**A fixed camera filming moving water is not a moving-camera shot.** Recording
-"motion: yes" because the water moves is the defect this rule exists to
-prevent — and the second test did worse than that: the manifest carried no
+**A fixed camera filming a moving subject is not a moving-camera shot** - a
+fixed camera filming moving water is not a moving-camera shot, and neither is
+one filming traffic, flames or a grazing herd. Recording "motion: yes" because
+the subject moves is the defect this rule exists to prevent — and the second test did worse than that: the manifest carried no
 motion field at all, and the film came out 84% locked-off water shots against
 a brief promising a cinematic journey.
 
@@ -109,8 +116,8 @@ from lib.camera_motion import analyse_clip, movement_profile
 
 m = analyse_clip(path)
 m.camera_motion, m.camera_direction, m.camera_speed_band, m.camera_steadiness
-m.subject_motion, m.subject_moving_fraction    # the water, recorded apart
-m.is_moving_camera                             # False for locked-off rapids
+m.subject_motion, m.subject_moving_fraction    # the subject, recorded apart
+m.is_moving_camera                             # False for locked-off rapids or a hearth
 m.is_relaxation_suitable_movement              # moving, graceful/brisk, steady
 m.loop_suspected
 ```
@@ -123,9 +130,9 @@ using `video_analyzer` for probing and scene detection; take camera motion from
 `lib.camera_motion`, which needs only numpy and FFmpeg.
 
 **A clip's title is not evidence.** Never accept footage because its title or
-description says "drone", "cinematic", "aerial" or "river". Two of the three
-"drone"-titled clips in this channel's existing pool measure as fully
-locked-off shots.
+description says "drone", "cinematic", "aerial" or the channel's subject
+word. Two of the three "drone"-titled clips in one channel's pool measured
+as fully locked-off shots.
 
 **An unanalysed clip is `unknown`, never `static`.** If `analyse_clip` raises,
 record that the clip was not screened. Do not default it into a class.
@@ -137,12 +144,15 @@ Run `movement_profile()` over the accepted pool and record it under
 
 - how many clips carry genuine camera movement, and how many of those are
   usable for relaxation (graceful or brisk **and** steady);
-- how many are locked-off shots of moving water;
+- how many are locked-off shots of a moving subject
+  (`locked_off_moving_subject_clips`);
 - which distinct camera motions exist — one kind repeated is not variety;
 - whether any aerial, gliding or forward-moving footage exists at all.
 
 **If the pool cannot support the approved concept's promised movement, say so
-here**, before the Scene Director tries to cast it. That is a procurement
+here** (a channel whose `channel-policy` sets `camera_movement: none` or
+`static_composition: allowed` promised no journey, and a locked-off pool is
+not a shortfall for it), before the Scene Director tries to cast it. That is a procurement
 shortfall, not an editing problem. For reference, the second test's pool
 measured 47 of 56 static, 7 with any camera movement, 4 usable, no push-ins,
 28 loop-suspected.

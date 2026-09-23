@@ -30,6 +30,10 @@ It blocks - and `write_publish_gate` writes the publish checkpoint as
   note.** Unused downloaded alternates are listed separately and never block.
 - **the mix was not solved from the channel's current `channel-mix` block**,
   or its verification failed a band (`check_mix_record`);
+- **a channel overlay the edit uses has no reusable provenance** in the
+  channel's `brand_assets/PROVENANCE.md` (`lib.channel_overlay.provenance_for`);
+  the evidence lives once with the asset, never copied per project, and a
+  missing entry is reported, never invented;
 - **the master fails the delivery contract** (`delivery_qc`: canvas, fps,
   pixel format, colour, SAR, duration, one audio stream, loudness, true peak,
   black/frozen spans, decode, A/V length, opening/body match).
@@ -52,7 +56,20 @@ Re-read before writing anything:
 
 - `proposal_packet` — the concept, and its **provisional** packaging hypothesis
 - `research_brief` — title and thumbnail patterns actually observed
-- the channel's `BRAND.md`, resolved at runtime
+- the channel, resolved at runtime and loaded in one call:
+
+  ```python
+  from lib.channel_policy import load_channel, publish_inputs, check_packaging
+  channel = load_channel(r"<VidQwik root>\Channels\<channel_id>", expected_id=channel_id)
+  inputs = publish_inputs(channel=channel, projects_dir=projects_dir,
+                          project_id=project_id, research_brief=research_brief)
+  ```
+
+  `inputs` carries the channel's `THUMBNAIL.md` and `METADATA.md` sections,
+  its `BRAND.md` profile and policy, its thumbnail references (own approved
+  thumbnails first, competitor references as inspiration only) and this
+  channel's **prior uploads** (from earlier projects' publish checkpoints).
+  Record it in `publish_log.metadata.channel_inputs`.
 - **the finished file itself** — sample frames across it, note the real
   duration, the footage actually used, the strongest moments
 
@@ -63,29 +80,41 @@ Evaluate alternatives internally — several titles, several candidate frames.
 
 ## Title
 
-Accurate · fits the channel · attractive without misleading clickbait · natural
-search language · leads with the primary environment or experience · **varies
-across uploads**.
+Written in the channel's `METADATA.md` **title style**: accurate · attractive
+without misleading clickbait · natural search language · leads with whatever
+that channel leads with (the environment for a nature channel, the place for
+a location-led channel, the species for a wildlife channel) · **varies across
+uploads**.
 
-Check the channel's previous upload. If your title is the same formula with the
-nouns swapped, write a different one. A recognisable house style is good; a
-mechanical template is not. **Do not copy competitor titles**, reworded or
-otherwise.
+Check the channel's prior uploads in `inputs["prior_uploads"]`. If your title
+is the same formula with the nouns swapped, write a different one. A
+recognisable house style is good; a mechanical template is not. Never reuse
+another channel's formula either: each channel's language is its own.
+`check_packaging(...)` flags a repeated title, a repeated skeleton and a
+cross-channel skeleton; a blocker means rewrite, not override. **Do not copy
+competitor titles**, reworded or otherwise.
 
 ## Description
 
-Ready to paste, natural and useful: a short opening description of the scene,
-what the viewer will experience, relaxation/sleep/study context where genuinely
-relevant, the environment, the channel's identity, a few relevant hashtags.
+In the channel's `METADATA.md` **description voice**, and in the channel's
+content language (`channel.profile.language`): ready to paste, natural and
+useful — a short opening description of what was filmed, what the viewer will
+experience, use context (rest, sleep, study, a drive) only where genuinely
+true, the channel's identity, a few relevant hashtags. Follow its **keyword
+usage**, **call to action**, **location naming** and **factual claims** rules
+exactly: a place is named only when the channel's rule says it may be, and no
+claim the footage does not support.
 
 No keyword stuffing. **No competitor names, no research notes, no pipeline
 detail** — the description is for viewers.
 
 ## Tags and hashtags
 
-A concise comma-separated set, roughly six to twelve. Not hundreds.
-Style: `relaxing river sounds, peaceful nature, forest river, waterfall sounds,
-nature relaxation, calming river`. Then about three relevant hashtags.
+A concise comma-separated set in the channel's `METADATA.md` **tags** and
+**hashtags** style, roughly six to twelve tags and a few hashtags. Not
+hundreds. Tags name what this video actually shows in this channel's terms;
+never a subject the channel avoids, never a list carried over from another
+channel or another upload.
 
 ## Thumbnail → `output/thumbnail.jpg`
 
@@ -104,9 +133,20 @@ Scale the sampling to the runtime: a handful of candidates across a 60-second
 piece, a wider spread across a multi-hour film. Sampling every minute of a
 5-hour video to choose one thumbnail is wasted work.
 
-Prefer: strong water subject · clean composition · cinematic natural appearance
-· minimal clutter · no misleading imagery · little or no text unless research
-supports it.
+Choose by the channel's `THUMBNAIL.md`: its **visual grammar**, **subject
+emphasis**, **composition**, **colour direction**, **typography** and
+**text/no-text preference**, inside one of its **acceptable layout families**
+and clear of its **avoid-list**. That file is grammar, not a template: it
+never gives coordinates or a fixed layout, and neither do you — compose the
+frame for this video. Always: clean composition · cinematic natural
+appearance · minimal clutter · no misleading imagery.
+
+Look at `inputs["thumbnail_references"]` in order. The channel's own
+**approved** thumbnails (`thumbnail_refs/approved/`) are the reference to
+grow toward and get stronger with every upload; **competitor** references
+(`thumbnail_refs/competitors/`) are market inspiration only — never copied,
+cropped, traced or colour-matched. Record which references informed the
+choice in `publish_log.metadata.thumbnail_rationale`.
 
 If a configured image-generation provider is already available it may be
 offered under the normal provider/decision rules — announce it, get approval,
@@ -189,7 +229,10 @@ OPTIONAL NOTES
 Replace every placeholder. `Visibility: Private` by default — a human decides
 when to go public. `Made for Kids: No`. Leave `Playlist:` blank if undetermined.
 Pull channel and video identity from the project marker and the channel's
-`BRAND.md`, never from memory. Use `OPTIONAL NOTES` only when something is
+`BRAND.md` profile (`channel.profile`), never from memory; `Language:` is the
+profile's content language. Before writing the file, run
+`check_packaging(title=..., description=..., tags=..., hashtags=...,
+channel=channel, prior=inputs["prior_uploads"])` and resolve every blocker. Use `OPTIONAL NOTES` only when something is
 genuinely useful; otherwise leave it empty.
 
 **No operator-facing metadata JSON.** The machine-readable `publish_log` stays

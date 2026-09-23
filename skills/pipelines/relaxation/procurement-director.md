@@ -121,20 +121,34 @@ asset.
 - timelapses
 - baked-in heavy grades or stylised edits
 - clips that already loop
-- prominent human activity; roads, traffic and built structures
+- every subject the channel's `BRAND.md` `channel-policy` block lists under
+  `subjects.avoid` (a river channel may avoid roads and buildings; a city or
+  scenic-America channel lists roads, architecture and traffic as primary -
+  the pipeline itself avoids nothing on the channel's behalf)
 
 ## Search for movement, then verify it on frames
 
-**Write search intent that can actually find camera movement.** Provider
-metadata is thin, so the query is the main lever. Combine a subject term with a
-movement term, and try several movement phrasings rather than one:
+**Write search intent that can actually find the movement the channel asks
+for** (`channel-policy composition.camera_movement`). Provider metadata is thin,
+so the query is the main lever. Combine one of the channel's primary subjects
+with a movement term, and try several movement phrasings rather than one. For
+example, a water-led channel might search:
 
 ```
 aerial river valley slow reveal      drone flying over forest river
 gliding over mountain stream         tracking shot along river
-forward moving through forest        slow pan river landscape
-descending over waterfall            flying low above water
 ```
+
+and a city or landmark channel:
+
+```
+slow drive down historic main street   skyline drift at blue hour
+gliding along coastal highway          tracking shot across old town square
+```
+
+Where the channel allows static composition (a fireplace, a hearth, a still
+lake at dawn), search for steady locked-off footage instead and do not treat
+its stillness as a shortfall.
 
 Use the provider's own filters where they exist (length, orientation,
 resolution). Raising the minimum clip length remains the single most effective
@@ -143,8 +157,9 @@ way to keep the clip count sane.
 ### A title is not a measurement (binding)
 
 **Never accept a clip because its title, tags or description contain "drone",
-"cinematic", "aerial" or "river".** In this channel's existing pool, two of the
-three clips whose titles said "drone" measure as fully locked-off static shots.
+"cinematic", "aerial" or the channel's subject word.** In one channel's pool,
+two of the three clips whose titles said "drone" measured as fully locked-off
+static shots.
 
 Screen the **downloaded file**:
 
@@ -228,7 +243,8 @@ damaging, because a single vocal line ruins an hour of footage.
 Work through this before any track is accepted:
 
 1. **Establish the episode's musical direction** from the approved proposal —
-   instrumentation, mood, and how the music should sit against the water.
+   instrumentation, mood, and how the music should sit against the channel's
+   principal environment layer (its `channel-mix` block), if it has one.
 2. **Discover several candidates**, not one. Vary the query and the page; the
    tools always take result[0], so a single call gives you a single opinion.
 3. **Inspect actual metadata and playable content** — duration, structure, and
@@ -293,8 +309,9 @@ report that capability gap and the smallest native change that would close it.
 The soundscape must change across the runtime. A single ambience file looping
 for an hour is audible and is the format's other classic failure.
 
-Derive from the approved concept: **each movement wants its own water or
-environment character**, plus secondary layers and occasional detail. Where
+Derive from the approved concept: **each movement wants its own environment
+character** (water, streets, wind, habitat, crackle - whatever the channel's
+`channel-policy audio` names), plus secondary layers and occasional detail. Where
 several similar files are needed, say explicitly that they must be *genuinely
 different recordings*, not the same source repeated.
 

@@ -9,8 +9,11 @@ permitted free stock acquired through OpenMontage's own provider tools
 (`free_auto`). The mode comes from `proposal_packet.metadata.sourcing`, and
 both keep a human approval gate.
 
-It suits rivers, forests, waterfalls, ocean, rain, fireplace, night nature,
-meditation and sleep scenery, and comparable calm formats.
+It is a production grammar, not a subject: it suits rivers, forests, ocean,
+coastlines, deserts, mountains, lakes, city scenery, city tours without
+narration, roads, landmarks, countryside, wildlife, rain, night city,
+fireplace and comparable calm formats. It is not for narrated documentaries,
+factual travel guides, crime stories or presenter-led shows.
 
 **Editorial scale follows the approved duration**, never a template: movements,
 shot count, hold lengths, music, ambience coverage, sourcing quantity, QC
@@ -37,10 +40,18 @@ metadata, with a Markdown view for the employee.
 
 ## Channel context is loaded at runtime
 
-**This pipeline hard-codes no channel, no brand and no competitor.** Resolve the
-channel from the project, then read its `BRAND.md`, `COMPETITORS.md` and
-`RESEARCH.md`. Subject priorities, look and voice come from there; production
-behaviour comes from here. Never carry one channel's identity into another's
+**This pipeline hard-codes no channel, no brand, no subject and no competitor.**
+Resolve the channel from the project id, then load its five policy files
+with `lib.channel_policy.load_channel(<VidQwik root>/Channels/<channel_id>,
+expected_id=<channel_id>)`: `BRAND.md` (profile frontmatter, the
+`channel-policy` block, the `channel-mix` block), `COMPETITORS.md`,
+`RESEARCH.md`, `THUMBNAIL.md` and `METADATA.md`. A missing or invalid file is
+a channel-policy defect: stop and report it. Subject priorities and the
+avoid-list, whether water or camera movement is required, whether a
+principal environment layer exists, look, voice, thumbnail grammar and
+publishing language all come from there; production behaviour comes from
+here. Nothing in this pipeline assumes water, a forest, birds, a journey or
+a moving camera - each is a channel's choice. Never carry one channel's identity into another's
 video, and never infer a channel from conversation.
 
 ## State lives in checkpoints, not in chat

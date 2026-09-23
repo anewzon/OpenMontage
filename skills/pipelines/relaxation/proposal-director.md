@@ -74,8 +74,8 @@ strategy and a resumable chunk plan. Both are correct outputs of this pipeline.
 
 ## Carry the channel's opening requirement (binding)
 
-Read the channel's `BRAND.md`. **If it requires a branded opening, that opening
-is part of this production** — planned here, carried through the edit, rendered
+Read the channel's `BRAND.md` `channel-policy` block (`opening:`). **If it
+requires a branded opening, that opening is part of this production** — planned here, carried through the edit, rendered
 and QC'd at compose. It is not an optional flourish, and a short runtime does
 not excuse it.
 
@@ -84,16 +84,20 @@ not excuse it.
 
 ```yaml
 opening:
-  required: true                  # read from the channel's BRAND.md
+  required: true                  # channel-policy opening.required
   intended_duration_seconds: 8
-  composition: <the channel's composition id>
+  composition: <channel-policy opening.composition, e.g. ScenicOpening>
   runtime: remotion               # short segment only; the body stays ffmpeg
-  roles:                          # the hierarchy the channel asks for
+  roles:                          # channel-policy opening.text_roles, described
     brand_signature: "constant channel signature, small and quiet"
     welcome_message: "original per-episode line, the dominant element"
     episode_line: "one line about this episode, lightest"
-  bed: "moving water from this episode's own footage"
+  bed: <channel-policy opening.bed - the channel's principal subject in
+        motion, a skyline, a hearth: whatever its block names>
 ```
+
+The text roles and the bed are the channel's, copied from its block - a
+channel may ask for two roles, or a static bed, or no opening at all.
 
 Record `required: false` when the channel asks for no opening — an explicit
 false, so a later stage can tell "not required" from "nobody looked".

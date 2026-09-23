@@ -207,7 +207,7 @@ Set the balance in this order:
 
    ```python
    from lib.stem_balance import measure_stem
-   m = measure_stem("work/stems/A2-water.wav")   # ebur128 on the assembly
+   m = measure_stem("work/stems/A2-water.wav")   # ebur128 on the assembly (role names are the channel's)
    ```
 
    **Do not regress to the mean loudness of the sources.** The second test
@@ -229,10 +229,15 @@ Set the balance in this order:
 
    **This is binding.** Never build a `BalanceSpec` by hand for a channel
    production, never type offsets or bands into the edit, and never call
-   `solve_balance(..., water_role=...)` without the channel's band — it now
-   raises, because the old built-in 6–8 dB default silently pulled the water
-   back up. The block states the water treatment too (`treatment_af`): apply it
-   to the built water stem **before** measuring it. A missing, duplicated or
+   `solve_balance(..., principal_role=...)` without the channel's band — it
+   now raises, because the old built-in 6–8 dB default silently pulled the
+   principal layer back up. The roles are the channel's: a reference layer
+   (`reference_role`), an optional principal environment layer (`principal:`
+   — water for one channel, city ambience or a hearth's crackle for another,
+   absent for a channel with none), an optional
+   `supporting_group` and an optional `detail_group`. The block states the
+   principal treatment too (`treatment_af`): apply it to the built principal
+   stem **before** measuring it. A missing, duplicated or
    invalid block is a channel-policy defect: stop and report it; do not
    substitute numbers.
 
@@ -273,7 +278,40 @@ Set the balance in this order:
    from the channel's CURRENT block (`check_mix_record`) and blocks a mix that
    was solved from anything else or failed a band.
 
-**Avoid heavy compression, and never duck the music under the water.**
+**Avoid heavy compression, and never duck the reference layer under the
+principal environment.**
+
+## Channel overlays: resolve, choose the moment, record (binding)
+
+A channel may own persistent overlays - a subscribe animation, a logo, a
+corner bug - declared in the `overlays:` list of its `channel-policy` block.
+This pipeline knows no overlay by name; it reads the channel's list:
+
+```python
+from lib.channel_overlay import resolve_overlays, schedule_overlay
+resolved = resolve_overlays(channel.policy.overlays, channel.root,
+                            frame=(contract.width, contract.height))
+edit_decisions["metadata"]["overlays"] = [
+    schedule_overlay(r, runtime_seconds=timeline_seconds, opening_seconds=opening_seconds,
+                     slots=metadata_relaxation_slots, frame=(contract.width, contract.height))
+    for r in resolved]
+```
+
+- `resolve_overlays` INSPECTS each asset (dimensions, frame rate, codec,
+  whether its alpha plane really varies, audio streams). A declared asset
+  that is missing or unusable raises: **stop and report it as a channel-policy
+  defect. Never omit the overlay silently and never substitute another file.**
+- `schedule_overlay` chooses the moment from this episode: inside a wide or
+  medium shot with a still or gentle subject, clear of the opening and of
+  the final fade, with no cut under it - and says why in `rationale`. There
+  is no house timestamp. A short piece gets the earliest honest window; a
+  piece too short for the overlay is an error, not an omission.
+- The record carries the asset's SHA-256, the window, the region and the
+  audio decision (`excluded` unless the channel says otherwise), so compose
+  is deterministic from it. The edit may move a corner placement to another
+  corner; it never resizes, recolours or re-cuts a channel asset.
+- A channel that declares no overlay gets `metadata.overlays = []` and
+  nothing else changes.
 
 Record the chosen targets, the measured built-stem figures and the applied
 gains in `metadata.audio_layers[]` **and** in `metadata.mix_balance`, so a
