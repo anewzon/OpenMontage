@@ -40,13 +40,21 @@ that model are refused until the operator resolves it.
 The calibrations also showed that V6 treats ``duration`` as a target: 10 s
 requested returned 33.5 s and 17.8 s, while 360 s returned 359.9 s twice.
 Count only the measured length of an accepted candidate, never the request.
+
+Paid files are never silently replaced: ``generate`` refuses, before anything
+is submitted, when ``output_path``, a candidate beside it or its pending-task
+record already exists. And the ``task_id`` is made durable the moment the
+provider returns it - see `task_record_path` - so a process that dies while
+polling leaves a record the free ``fetch`` operation can recover from.
 """
 
 from __future__ import annotations
 
+import json
 import math
 import os
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -166,6 +174,35 @@ def check_charge(model: str, expected: float, consumed: Optional[float]) -> dict
     }
     _PRICING_MISMATCHES[model] = info
     return info
+
+
+def task_record_path(output_path: str | os.PathLike[str]) -> Path:
+    """Where the pending-task record for ``output_path`` lives.
+
+    The record is written before the paid submit (``submitting``), rewritten
+    as soon as the provider returns a ``task_id`` (``submitted``), and closed
+    when the call ends (``completed`` / ``failed``). A record still reading
+    ``submitted`` after the process is gone means a billed task that can be
+    recovered for free with ``operation: fetch`` and its ``task_id``; one still
+    reading ``submitting`` means the charge outcome is unknown.
+    """
+    path = Path(output_path)
+    return path.with_name(f"{path.stem}.suno_task.json")
+
+
+def read_task_record(output_path: str | os.PathLike[str]) -> Optional[dict[str, Any]]:
+    """The pending-task record for ``output_path``, or None when there is none."""
+    path = task_record_path(output_path)
+    if not path.exists():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _write_json_atomic(path: Path, data: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    os.replace(tmp, path)
 
 
 class SunoProviderError(RuntimeError):
@@ -322,6 +359,15 @@ class SunoMusic(BaseTool):
                 ),
             },
             "max_wait_seconds": {"type": "number", "minimum": 30},
+            "overwrite": {
+                "type": "boolean",
+                "default": False,
+                "description": (
+                    "generate refuses to start when output_path, a candidate "
+                    "beside it or its pending-task record already exists. Set "
+                    "true only to replace files deliberately."
+                ),
+            },
         },
     }
 
@@ -337,6 +383,7 @@ class SunoMusic(BaseTool):
     ]
     side_effects = [
         "writes every generated candidate under output_path's directory",
+        "writes a pending-task record (<output stem>.suno_task.json) beside output_path",
         "calls Suno API via sunoapi.org (one paid generation per generate call)",
     ]
     user_visible_verification = [
@@ -392,6 +439,10 @@ class SunoMusic(BaseTool):
             "credits_per_generation": credits,
             "usd_per_generation": round(credits * USD_PER_CREDIT, 4),
         }
+
+    def pending_task_record(self, output_path: str | os.PathLike[str]) -> Optional[dict[str, Any]]:
+        """The durable task record for a generation to ``output_path`` (see `task_record_path`)."""
+        return read_task_record(output_path)
 
     def estimate_cost(self, inputs: dict[str, Any]) -> float:
         """USD for one call. Raises `SunoPricingUnconfirmed` when unpriced."""
@@ -456,7 +507,7 @@ class SunoMusic(BaseTool):
         model = inputs.get("model", DEFAULT_MODEL)
         try:
             payload = self._build_payload(inputs)
-            self._require_output_path(inputs)
+            output = self._require_output_path(inputs)
             estimated = self.estimate_cost(inputs)
             expected_credits = credits_per_generation(model)
         except SunoPricingUnconfirmed as exc:
@@ -465,36 +516,71 @@ class SunoMusic(BaseTool):
             return ToolResult(success=False, error=f"Invalid Suno request: {exc}",
                               data={"charge_status": "not_charged"})
 
+        existing = self._existing_outputs(output)
+        if existing and not inputs.get("overwrite"):
+            return ToolResult(
+                success=False,
+                error=("Refusing a paid generation that would overwrite existing files: "
+                       + ", ".join(str(p) for p in existing)
+                       + ". Choose a new output_path; nothing was submitted."),
+                data={"charge_status": "not_charged", "existing_files": [str(p) for p in existing]},
+            )
+
         start = time.time()
+        record: dict[str, Any] = {
+            "tool": self.name, "provider": "suno", "model": model,
+            "operation": "generate", "output_path": str(output),
+            "requested_duration_seconds": inputs.get("duration_seconds"),
+            "status": "submitting", "task_id": None,
+            "submitting_at": self._now(),
+        }
+        try:
+            _write_json_atomic(task_record_path(output), record)
+        except OSError as exc:
+            # Without a durable record an interruption could not be recovered.
+            return ToolResult(success=False,
+                              error=f"cannot write the pending-task record ({exc}); nothing was submitted",
+                              data={"charge_status": "not_charged"})
         credits_before = self._try_credits(api_key)
 
         try:
             task_id = self._submit(payload, api_key)
         except SunoProviderError as exc:
-            return self._failure(exc, api_key, model=model, estimated=estimated,
-                                 expected_credits=expected_credits,
-                                 credits_before=credits_before, task_id=None, start=start)
+            result = self._failure(exc, api_key, model=model, estimated=estimated,
+                                   expected_credits=expected_credits,
+                                   credits_before=credits_before, task_id=None, start=start)
+            self._close_record(output, record, result)
+            return result
+        record.update(status="submitted", task_id=task_id, submitted_at=self._now())
+        try:
+            _write_json_atomic(task_record_path(output), record)
+        except OSError:
+            pass  # the returned result still carries task_id
 
         try:
-            record = self._poll(task_id, api_key, inputs.get("max_wait_seconds"))
-            tracks = self._extract_tracks(record)
+            status_record = self._poll(task_id, api_key, inputs.get("max_wait_seconds"))
+            tracks = self._extract_tracks(status_record)
             if not tracks:
                 raise SunoProviderError("Suno reported SUCCESS but returned no tracks",
                                         charge_status="charged")
             candidates = self._download_candidates(tracks, inputs)
         except SunoProviderError as exc:
-            return self._failure(exc, api_key, model=model, estimated=estimated,
-                                 expected_credits=expected_credits,
-                                 credits_before=credits_before, task_id=task_id, start=start)
+            result = self._failure(exc, api_key, model=model, estimated=estimated,
+                                   expected_credits=expected_credits,
+                                   credits_before=credits_before, task_id=task_id, start=start)
+            self._close_record(output, record, result)
+            return result
         except TimeoutError as exc:
             err = SunoProviderError(
                 f"{exc}. The task is still billed; recover it with operation=fetch "
                 f"and task_id={task_id} instead of generating again.",
                 charge_status="charged",
             )
-            return self._failure(err, api_key, model=model, estimated=estimated,
-                                 expected_credits=expected_credits,
-                                 credits_before=credits_before, task_id=task_id, start=start)
+            result = self._failure(err, api_key, model=model, estimated=estimated,
+                                   expected_credits=expected_credits,
+                                   credits_before=credits_before, task_id=task_id, start=start)
+            self._close_record(output, record, result)
+            return result
 
         cost, basis, credits_after, consumed = self._actual_cost(
             api_key, credits_before, estimated)
@@ -505,7 +591,41 @@ class SunoMusic(BaseTool):
             credits_consumed=consumed, start=start,
         )
         self._attach_pricing_check(result, model, expected_credits, consumed)
+        self._close_record(output, record, result)
         return result
+
+    def _existing_outputs(self, output: Path) -> list[Path]:
+        """Files a generation to ``output`` would write over."""
+        found = [p for p in (output, task_record_path(output)) if p.exists()]
+        suffix = output.suffix or ".mp3"
+        if output.parent.exists():
+            found += sorted(output.parent.glob(f"{output.stem}__cand*{suffix}"))
+        return found
+
+    def _close_record(self, output: Path, record: dict[str, Any], result: ToolResult) -> None:
+        data = result.data or {}
+        record.update(
+            status="completed" if result.success else "failed",
+            task_id=data.get("task_id") or record.get("task_id"),
+            charge_status=data.get("charge_status"),
+            cost_usd=result.cost_usd,
+            closed_at=self._now(),
+        )
+        if result.success:
+            record["candidates"] = [
+                {"index": c["index"], "path": c["path"], "downloaded": c["downloaded"]}
+                for c in data.get("candidates") or []
+            ]
+        else:
+            record["error"] = result.error
+        try:
+            _write_json_atomic(task_record_path(output), record)
+        except OSError:
+            pass
+
+    @staticmethod
+    def _now() -> str:
+        return datetime.now(timezone.utc).isoformat()
 
     def _fetch_existing(self, inputs: dict[str, Any], api_key: str) -> ToolResult:
         task_id = inputs.get("task_id")
@@ -521,7 +641,7 @@ class SunoMusic(BaseTool):
             tracks = self._extract_tracks(record)
             if not tracks:
                 return ToolResult(success=False, error=f"Task {task_id} has no tracks")
-            candidates = self._download_candidates(tracks, inputs)
+            candidates = self._download_candidates(tracks, inputs, keep_existing=True)
         except (SunoProviderError, TimeoutError) as exc:
             return ToolResult(success=False, error=self._redact(str(exc), api_key),
                               data={"task_id": task_id, "charge_status": "not_charged"})
@@ -769,8 +889,13 @@ class SunoMusic(BaseTool):
         return []
 
     def _download_candidates(self, tracks: list[dict[str, Any]],
-                             inputs: dict[str, Any]) -> list[dict[str, Any]]:
-        """Download every candidate the paid generation produced."""
+                             inputs: dict[str, Any],
+                             keep_existing: bool = False) -> list[dict[str, Any]]:
+        """Download every candidate the paid generation produced.
+
+        ``keep_existing`` (free recovery): a file already on disk is kept, not
+        downloaded over. Downloads are atomic, so an existing file is whole.
+        """
         primary = self._require_output_path(inputs).resolve()
         primary.parent.mkdir(parents=True, exist_ok=True)
         index = int(inputs.get("track_index", 0))
@@ -793,7 +918,11 @@ class SunoMusic(BaseTool):
                 "downloaded": False,
                 "written_to_output_path": i == index,
             }
-            if url:
+            if keep_existing and path.exists():
+                entry["path"] = str(path)
+                entry["downloaded"] = True
+                entry["preexisting"] = True
+            elif url:
                 self._download(url, path)
                 entry["path"] = str(path)
                 entry["downloaded"] = True
@@ -814,7 +943,11 @@ class SunoMusic(BaseTool):
                 response.raise_for_status()
                 if not response.content:
                     raise ValueError("empty audio body")
-                path.write_bytes(response.content)
+                # Atomic: an interrupted download never leaves a partial file
+                # that a later recovery would mistake for a whole one.
+                part = path.with_name(path.name + ".part")
+                part.write_bytes(response.content)
+                os.replace(part, path)
                 return
             except (requests.RequestException, ValueError) as exc:
                 last = exc

@@ -166,6 +166,15 @@ class ElevenLabsSFX(BaseTool):
                 "type": "string",
                 "description": "Explicit path inside the project workspace.",
             },
+            "overwrite": {
+                "type": "boolean",
+                "default": False,
+                "description": (
+                    "The request is refused, before anything is paid for, when "
+                    "the output file already exists. Set true only to replace "
+                    "it deliberately."
+                ),
+            },
         },
     }
 
@@ -267,6 +276,12 @@ class ElevenLabsSFX(BaseTool):
 
     # ---- execution --------------------------------------------------------
 
+    @staticmethod
+    def _target_path(inputs: dict[str, Any], output_format: str) -> Path:
+        """The file this request will write (PCM is wrapped as .wav)."""
+        path = Path(inputs["output_path"]).resolve()
+        return path.with_suffix(".wav") if output_format.startswith("pcm_") else path
+
     def execute(self, inputs: dict[str, Any]) -> ToolResult:
         api_key = self._get_api_key()
         if not api_key:
@@ -277,6 +292,15 @@ class ElevenLabsSFX(BaseTool):
         except ValueError as exc:
             return ToolResult(success=False, error=f"Invalid SFX request: {exc}",
                               data={"charge_status": "not_charged"})
+        target = self._target_path(inputs, params["output_format"])
+        if target.exists() and not inputs.get("overwrite"):
+            # Checked before the paid request: refusing afterwards would waste it.
+            return ToolResult(
+                success=False,
+                error=(f"Refusing a paid generation that would overwrite {target}. "
+                       "Choose a new output_path; nothing was requested."),
+                data={"charge_status": "not_charged", "existing_files": [str(target)]},
+            )
 
         import requests
 
@@ -302,10 +326,9 @@ class ElevenLabsSFX(BaseTool):
             return self._failure("empty audio body", "unknown", estimated, start, api_key)
 
         output_format = params["output_format"]
-        path = Path(inputs["output_path"]).resolve()
+        path = target
         path.parent.mkdir(parents=True, exist_ok=True)
         if output_format.startswith("pcm_"):
-            path = path.with_suffix(".wav")
             self._write_wav(path, response.content, int(output_format.split("_")[1]))
         else:
             path.write_bytes(response.content)

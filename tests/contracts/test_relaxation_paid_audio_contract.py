@@ -32,7 +32,6 @@ from lib.relaxation_policy import (
     account_music_candidates,
     approved_budget_tracker,
     budget_summary,
-    generate_music_programme,
     next_music_request,
     plan_paid_audio,
 )
@@ -691,51 +690,11 @@ class TestCostEfficientRequestLength:
 # --------------------------------------------------------------------------
 
 
-class ScriptedMusicTool(BaseTool):
-    """Returns scripted candidates per call; counts every execution."""
-
-    name = "scripted_music"
-    capability = "music_generation"
-    provider = "test"
-
-    def __init__(self, batches, price=0.06, mismatch_on=None):
-        self.batches = list(batches)
-        self.price = price
-        self.mismatch_on = mismatch_on
-        self.calls = 0
-
-    def estimate_cost(self, inputs):
-        return self.price
-
-    def execute(self, inputs):
-        self.calls += 1
-        durations = self.batches[self.calls - 1]
-        stem = Path(inputs["output_path"])
-        cands = [{"index": i, "path": f"{stem}#{self.calls - 1}#{i}", "downloaded": True,
-                  "duration_seconds": inputs.get("duration_seconds")}
-                 for i in range(len(durations))]
-        data = {"candidates": cands, "task_id": f"t{self.calls}", "_measured": durations}
-        if self.mismatch_on == self.calls:
-            data["pricing_mismatch"] = {"message": "expected 12 credits, charged 20."}
-        return ToolResult(success=True, cost_usd=self.price, data=data)
-
-
-def _probe_from(tool):
-    def probe(path):
-        _, batch, index = path.split("#")
-        return tool.batches[int(batch)][int(index)]
-    return probe
-
-
-def _accept_all(cands):
-    return {c["index"]: {"accepted": True, "reason": "passes screen"} for c in cands}
-
-
-def _music_tracker(tmp_path, budget=1.0):
-    return _cap_tracker(tmp_path, budget, tools=("scripted_music",))
-
-
 class TestMeasuredProgramme:
+    """Measured accounting. The paid loop itself - authorisation from the
+    approved proposal and durable records, and every stop - is held by
+    tests/contracts/test_relaxation_paid_music_safety.py."""
+
     def test_measured_accepted_length_counts_not_the_request(self):
         cands = [{"index": 0, "path": "a", "downloaded": True, "duration_seconds": 360},
                  {"index": 1, "path": "b", "downloaded": True, "duration_seconds": 360}]
@@ -760,42 +719,9 @@ class TestMeasuredProgramme:
         with pytest.raises(ValueError):
             account_music_candidates(cands, {0: {"accepted": True}}, probe=lambda p: None)
 
-    def test_generation_stops_once_the_target_is_met(self, tmp_path):
-        tool = ScriptedMusicTool([(359.9, 359.9), (359.9, 359.9), (359.9, 359.9)])
-        tracker = _music_tracker(tmp_path)
-        ledger = generate_music_programme(
-            tracker=tracker, tool=tool, inputs={"output_path": str(tmp_path / "m.mp3")},
-            target_seconds=680, evaluate=_accept_all, max_requests=3, probe=_probe_from(tool))
-        assert tool.calls == 1, "719.8 accepted s already meets 680 s"
-        assert ledger["stop"]["reason"] == "target_met"
-        assert ledger["accepted_seconds"] == pytest.approx(719.8)
-
-    def test_unused_retry_allowance_is_not_spent(self, tmp_path):
-        tool = ScriptedMusicTool([(300.0, 300.0)] * 5)
-        tracker = _music_tracker(tmp_path)
-        ledger = generate_music_programme(
-            tracker=tracker, tool=tool, inputs={"output_path": str(tmp_path / "m.mp3")},
-            target_seconds=1200, evaluate=_accept_all, max_requests=5, probe=_probe_from(tool))
-        assert tool.calls == 2 and ledger["requests_made"] == 2
-        assert tracker.budget_spent_usd == pytest.approx(0.12)
-
-    def test_rejections_drive_the_next_call_from_the_actual_remainder(self, tmp_path):
-        tool = ScriptedMusicTool([(340.0, 300.0), (350.0, 320.0)])
-        decisions = iter([
-            {0: {"accepted": True}, 1: {"accepted": False, "reason": "vocal-like pad"}},
-            {0: {"accepted": True}, 1: {"accepted": True}},
-        ])
-        tracker = _music_tracker(tmp_path)
-        ledger = generate_music_programme(
-            tracker=tracker, tool=tool, inputs={"output_path": str(tmp_path / "m.mp3")},
-            target_seconds=900, evaluate=lambda c: next(decisions), max_requests=4,
-            probe=_probe_from(tool))
-        assert [g["accepted_seconds"] for g in ledger["generations"]] == [340.0, 670.0]
-        assert tool.calls == 2 and ledger["stop"]["reason"] == "target_met"
-
     def test_next_request_uses_the_actual_remaining_requirement(self, tmp_path):
-        tracker = _music_tracker(tmp_path)
-        tool = ScriptedMusicTool([])
+        tracker = _cap_tracker(tmp_path, 1.0)
+        tool = FakePaidTool(price=0.06)
         step = next_music_request(target_seconds=3600, accepted_seconds=680, tracker=tracker,
                                   tool=tool, inputs={}, requests_made=1, max_requests=13)
         assert step["generate"] is True and step["remaining_seconds"] == 2920
@@ -803,57 +729,6 @@ class TestMeasuredProgramme:
                                   tool=tool, inputs={}, requests_made=11, max_requests=13)
         assert done["generate"] is False and done["reason"] == "target_met"
         assert tool.calls == 0
-
-    def test_the_request_ceiling_and_the_budget_stop_generation(self, tmp_path):
-        tool = ScriptedMusicTool([(100.0,)] * 9)
-        ledger = generate_music_programme(
-            tracker=_music_tracker(tmp_path), tool=tool,
-            inputs={"output_path": str(tmp_path / "m.mp3")}, target_seconds=10_000,
-            evaluate=_accept_all, max_requests=2, probe=_probe_from(tool))
-        assert tool.calls == 2 and ledger["stop"]["reason"] == "request_ceiling_reached"
-
-        tool = ScriptedMusicTool([(100.0,)] * 9)
-        ledger = generate_music_programme(
-            tracker=_music_tracker(tmp_path / "b", budget=0.13), tool=tool,
-            inputs={"output_path": str(tmp_path / "m.mp3")}, target_seconds=10_000,
-            evaluate=_accept_all, max_requests=9, probe=_probe_from(tool))
-        assert tool.calls == 2 and ledger["stop"]["reason"] == "budget_would_be_exceeded"
-
-    def test_every_call_goes_through_the_cost_tracker(self, tmp_path):
-        tool = ScriptedMusicTool([(200.0, 200.0)] * 3)
-        tracker = _music_tracker(tmp_path)
-        generate_music_programme(
-            tracker=tracker, tool=tool, inputs={"output_path": str(tmp_path / "m.mp3")},
-            target_seconds=1000, evaluate=_accept_all, max_requests=3, probe=_probe_from(tool))
-        executed = [e for e in tracker.entries if e["status"] == "completed"]
-        assert len(executed) == tool.calls == 3
-
-    def test_a_tool_outside_the_approved_plan_never_executes(self, tmp_path):
-        tool = ScriptedMusicTool([(200.0,)])
-        ledger = generate_music_programme(
-            tracker=_cap_tracker(tmp_path, 1.0, tools=()), tool=tool,
-            inputs={"output_path": str(tmp_path / "m.mp3")}, target_seconds=100,
-            evaluate=_accept_all, max_requests=3, probe=_probe_from(tool))
-        assert tool.calls == 0 and ledger["stop"]["reason"] == "reservation_refused"
-
-    def test_a_pricing_mismatch_stops_the_programme(self, tmp_path):
-        tool = ScriptedMusicTool([(100.0,)] * 5, mismatch_on=1)
-        tracker = _music_tracker(tmp_path)
-        ledger = generate_music_programme(
-            tracker=tracker, tool=tool, inputs={"output_path": str(tmp_path / "m.mp3")},
-            target_seconds=10_000, evaluate=_accept_all, max_requests=5, probe=_probe_from(tool))
-        assert tool.calls == 1 and ledger["stop"]["reason"] == "pricing_mismatch"
-        assert "scripted_music" in tracker._pricing_mismatches
-
-    def test_a_programme_resumes_from_recorded_progress(self, tmp_path):
-        tool = ScriptedMusicTool([(400.0,)])
-        ledger = generate_music_programme(
-            tracker=_music_tracker(tmp_path), tool=tool,
-            inputs={"output_path": str(tmp_path / "m.mp3")}, target_seconds=1000,
-            evaluate=_accept_all, max_requests=4, accepted_seconds=700, requests_made=2,
-            probe=_probe_from(tool))
-        assert tool.calls == 1 and ledger["requests_made"] == 3
-        assert ledger["stop"]["reason"] == "target_met"
 
     def test_directors_require_measured_seconds_and_stopping(self, directors, manifest):
         asset = _flat(directors["asset-director"])

@@ -253,3 +253,26 @@ def test_tool_holds_no_environment_taxonomy():
     src = Path(sfx_module.__file__).read_text(encoding="utf-8").lower()
     for word in ("water", "river", "forest", "bird", "rain", "fire", "ocean", "wind"):
         assert word not in src, f"elevenlabs_sfx names a sound category ({word!r})"
+
+
+# ---- existing-file protection (Phase 1) -----------------------------------
+
+
+@pytest.mark.parametrize("fmt,name", [(None, "bed_a.mp3"), ("pcm_44100", "bed_a.wav")])
+def test_an_existing_paid_file_is_never_overwritten(keyed, tool, tmp_path, fmt, name):
+    sfx = tmp_path / "sfx"
+    sfx.mkdir()
+    (sfx / name).write_bytes(b"paid earlier")
+    extra = {"output_format": fmt} if fmt else {}
+    result, post = _run(tool, _inputs(tmp_path, **extra), _resp())
+    assert result.success is False and "overwrite" in result.error
+    assert result.data["charge_status"] == "not_charged"
+    post.assert_not_called()
+    assert (sfx / name).read_bytes() == b"paid earlier"
+
+
+def test_overwriting_an_sfx_file_is_an_explicit_choice(keyed, tool, tmp_path):
+    (tmp_path / "sfx").mkdir()
+    (tmp_path / "sfx" / "bed_a.mp3").write_bytes(b"paid earlier")
+    result, post = _run(tool, _inputs(tmp_path, overwrite=True), _resp())
+    assert result.success is True and post.call_count == 1

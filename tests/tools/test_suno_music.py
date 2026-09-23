@@ -346,7 +346,9 @@ def test_an_off_rate_charge_is_surfaced_and_blocks_further_generation(priced, to
     assert tool.pricing_status("V6")["mismatch"]["measured_credits"] == 100 - after
 
     suno_module.resolve_pricing_mismatch("V6")
-    assert _run(tool, _instrumental(tmp_path), FakeSuno()).success is True
+    # A fresh path: the first generation's paid files are never written over.
+    fresh = _instrumental(tmp_path, output_path=str(tmp_path / "music" / "take2.mp3"))
+    assert _run(tool, fresh, FakeSuno()).success is True
 
 
 def test_a_failed_task_that_charged_off_rate_is_also_a_mismatch(priced, tool, tmp_path):
@@ -450,7 +452,9 @@ def test_secret_never_appears_in_errors_or_results(priced, tool, tmp_path):
     assert KEY not in repr(result.data)
     assert "[REDACTED]" in result.error
 
-    ok = _run(tool, _instrumental(tmp_path), FakeSuno())
+    ok = _run(tool, _instrumental(tmp_path, output_path=str(tmp_path / "music" / "ok.mp3")),
+              FakeSuno())
+    assert ok.success is True
     assert KEY not in repr(ok.data)
     assert fake.posts[0]["headers"]["Authorization"] == f"Bearer {KEY}"
 
@@ -503,3 +507,95 @@ def test_a_matching_max_duration_charge_passes(priced, tool, tmp_path):
     result = _run(tool, _instrumental(tmp_path, duration_seconds=360), fake)
     assert result.data["pricing_check"]["status"] == "match"
     assert [c["duration_seconds"] for c in result.data["candidates"]] == [359.84, 359.88]
+
+
+# ---- durable task records and existing-file protection (Phase 1) ------------
+
+
+def test_the_task_id_is_durable_before_polling_starts(priced, tool, tmp_path):
+    """A process that dies while polling leaves a recoverable record."""
+    inputs = _instrumental(tmp_path)
+    fake = FakeSuno()
+
+    def die_while_polling(*_a, **_k):
+        record = suno_module.read_task_record(inputs["output_path"])
+        assert record["status"] == "submitted" and record["task_id"] == "task-1"
+        raise KeyboardInterrupt  # the session is killed, not an ordinary error
+
+    with patch.object(tool, "_poll", side_effect=die_while_polling):
+        with pytest.raises(KeyboardInterrupt):
+            _run(tool, inputs, fake)
+    assert len(fake.posts) == 1
+    record = tool.pending_task_record(inputs["output_path"])
+    assert record["status"] == "submitted" and record["task_id"] == "task-1"
+    assert record["output_path"] == str(tmp_path / "music" / "take.mp3")
+
+
+def test_a_record_exists_before_the_paid_submit(priced, tool, tmp_path):
+    inputs = _instrumental(tmp_path)
+    seen = {}
+
+    def submit(payload, api_key):
+        seen.update(suno_module.read_task_record(inputs["output_path"]))
+        raise KeyboardInterrupt
+
+    with patch.object(tool, "_submit", side_effect=submit):
+        with pytest.raises(KeyboardInterrupt):
+            _run(tool, inputs, FakeSuno())
+    assert seen["status"] == "submitting" and seen["task_id"] is None
+    assert tool.pending_task_record(inputs["output_path"])["status"] == "submitting"
+
+
+def test_a_finished_call_closes_its_record(priced, tool, tmp_path):
+    result = _run(tool, _instrumental(tmp_path), FakeSuno())
+    record = tool.pending_task_record(_instrumental(tmp_path)["output_path"])
+    assert result.success and record["status"] == "completed"
+    assert record["task_id"] == "task-1" and len(record["candidates"]) == 2
+    assert record["charge_status"] == "charged" and record["cost_usd"] == 0.06
+
+
+def test_a_timeout_closes_the_record_as_billed_with_its_task_id(priced, tool, tmp_path):
+    fake = FakeSuno(statuses=("PENDING",), credits=(100, 88))
+    result = _run(tool, _instrumental(tmp_path, max_wait_seconds=30), fake)
+    record = tool.pending_task_record(_instrumental(tmp_path)["output_path"])
+    assert result.success is False and "operation=fetch" in result.error
+    assert record["status"] == "failed" and record["task_id"] == "task-1"
+    assert record["charge_status"] == "charged"
+
+
+@pytest.mark.parametrize("existing", ["take.mp3", "take__cand1.mp3", "take.suno_task.json"])
+def test_existing_paid_files_are_never_overwritten(priced, tool, tmp_path, existing):
+    music = tmp_path / "music"
+    music.mkdir()
+    (music / existing).write_bytes(b"paid audio from an earlier generation")
+    fake = FakeSuno()
+    result = _run(tool, _instrumental(tmp_path), fake)
+    assert result.success is False and "overwrite" in result.error
+    assert result.data["charge_status"] == "not_charged"
+    assert fake.posts == [], "refused BEFORE anything is paid for"
+    assert (music / existing).read_bytes() == b"paid audio from an earlier generation"
+
+
+def test_overwrite_is_an_explicit_choice(priced, tool, tmp_path):
+    _run(tool, _instrumental(tmp_path), FakeSuno())
+    again = _run(tool, _instrumental(tmp_path, overwrite=True), FakeSuno())
+    assert again.success is True
+
+
+def test_free_recovery_keeps_files_already_on_disk(priced, tool, tmp_path):
+    music = tmp_path / "music"
+    music.mkdir()
+    (music / "take.mp3").write_bytes(b"downloaded before the interruption")
+    fake = FakeSuno(statuses=("SUCCESS",))
+    result = _run(tool, {"operation": "fetch", "task_id": "task-1", "prompt": "",
+                         "output_path": str(music / "take.mp3")}, fake)
+    assert result.success and result.cost_usd == 0.0 and fake.posts == []
+    assert (music / "take.mp3").read_bytes() == b"downloaded before the interruption"
+    first, second = result.data["candidates"]
+    assert first.get("preexisting") is True and second.get("preexisting") is None
+    assert (music / "take__cand1.mp3").exists()
+
+
+def test_downloads_are_atomic(priced, tool, tmp_path):
+    _run(tool, _instrumental(tmp_path), FakeSuno())
+    assert not list((tmp_path / "music").glob("*.part"))

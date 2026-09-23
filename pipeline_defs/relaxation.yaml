@@ -259,6 +259,11 @@ stages:
       - Only the measured length of accepted candidates counts toward the programme, never the requested length
       - Remaining music recalculated from accepted seconds before each call; generation stops at the target
       - Retry allowance is a ceiling, never a quota - unused allowance is not spent
+      - "Music screened with whole-word terms; every candidate accepted, rejected with cited evidence, or uncertain"
+      - "All-rejected, uncertain, retry-allowance and unknown-charge results STOP paid music until the operator records a review"
+      - "Music progress rebuilt from cost_log, the music ledger, files and asset_manifest - caller counts never override them"
+      - "Music request ceiling and allocation come from the approved proposal; music never spends the SFX allocation"
+      - "Interrupted paid tasks recovered with the free fetch; paid audio files never overwritten"
       - SFX derived from BRAND.md, the actual footage and the approved concept - no fixed category list
       - Good native clip audio preferred over generating an equivalent SFX layer
       - Long environmental beds generated as short loopable sources, not minute-for-minute

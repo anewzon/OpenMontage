@@ -26,12 +26,21 @@ the cap is OpenMontage's own `CostTracker` in `cap` mode.
     print(budget_summary(plan))    # what the operator approves
     tracker = approved_budget_tracker(proposal_packet, project_dir)
     tracker.run_tool(tool, inputs, operation="...")   # estimate/reserve/execute/reconcile
+
+Paid music runs through `generate_music_programme`, which authorises every
+request from the approved proposal and the project's durable records, screens
+every candidate with bounded evidence, and stops for the operator whenever a
+result is all-rejected, uncertain or would draw on the retry allowance.
 """
 
 from __future__ import annotations
 
 import functools
+import json
 import math
+import os
+import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
@@ -39,10 +48,19 @@ import yaml
 
 __all__ = [
     "BudgetNotApproved",
+    "MusicLimitsUnavailable",
     "account_music_candidates",
+    "approved_music_limits",
+    "authorize_music_request",
+    "decide_music_candidate",
+    "find_prohibited_terms",
     "generate_music_programme",
     "generation_duration_strategy",
+    "load_music_ledger",
     "next_music_request",
+    "reconcile_music_progress",
+    "record_music_review",
+    "screen_music_candidate",
     "DurationOutOfRange",
     "PaidCostUnavailable",
     "approved_budget_tracker",
@@ -555,10 +573,12 @@ def account_music_candidates(
 ) -> dict[str, Any]:
     """Accepted seconds contributed by ONE paid generation's candidates.
 
-    ``decisions`` maps each candidate ``index`` to ``{"accepted": bool,
-    "reason": str}`` - every candidate needs one; nothing is accepted by
-    default. An accepted candidate counts at its MEASURED length (ffprobe),
-    never the requested or provider-reported length; a rejected or missing
+    ``decisions`` maps each candidate ``index`` to a decision - every candidate
+    needs one; nothing is accepted by default. A decision is either the full
+    form from `decide_music_candidate` (``{"outcome": "accepted" | "rejected" |
+    "uncertain", ...}``) or the older ``{"accepted": bool, "reason": str}``.
+    An accepted candidate counts at its MEASURED length (ffprobe), never the
+    requested or provider-reported length; a rejected, uncertain or missing
     one counts zero. An accepted candidate that cannot be measured raises.
     """
     if probe is None:
@@ -570,21 +590,29 @@ def account_music_candidates(
         if index not in decisions:
             raise ValueError(f"candidate {index} has no accept/reject decision")
         decision = decisions[index]
-        accepted = bool(decision.get("accepted")) and bool(cand.get("downloaded"))
-        measured = probe(cand["path"]) if cand.get("path") else None
+        outcome = decision.get("outcome") or ("accepted" if decision.get("accepted") else "rejected")
+        accepted = outcome == "accepted" and bool(cand.get("downloaded"))
+        measured = cand.get("measured_seconds")
+        if measured is None and cand.get("path"):
+            measured = probe(cand["path"])
         if accepted and not measured:
             raise ValueError(f"accepted candidate {index} could not be measured")
         seconds = float(measured) if accepted else 0.0
         total += seconds
-        rows.append({
+        row = {
             "index": index,
             "path": cand.get("path"),
             "provider_reported_seconds": cand.get("duration_seconds"),
             "measured_seconds": measured,
+            "outcome": outcome if cand.get("downloaded") or outcome != "accepted" else "uncertain",
             "accepted": accepted,
             "accepted_seconds": seconds,
             "reason": decision.get("reason") or "",
-        })
+        }
+        for key in ("criterion", "evidence", "screen"):
+            if key in decision:
+                row[key] = decision[key]
+        rows.append(row)
     return {"accepted_seconds": round(total, 3), "candidates": rows}
 
 
@@ -598,8 +626,11 @@ def next_music_request(
     requests_made: int,
     max_requests: int,
 ) -> dict[str, Any]:
-    """Whether ONE more paid generation is justified, from actual progress.
+    """The arithmetic of whether one more generation would help.
 
+    This is arithmetic only and authorises nothing: its inputs are whatever
+    the caller passes. Paid calls are authorised by `authorize_music_request`,
+    which rebuilds progress from the project's durable records first.
     The planned request count and retry allowance are a ceiling, never a
     quota: once accepted music meets the target, the answer is no.
     """
@@ -624,59 +655,850 @@ def next_music_request(
     return {**state, "generate": True, "reason": "more_accepted_music_needed"}
 
 
-def generate_music_programme(
+# --------------------------------------------------------------------------
+# Paid music: evidence-based candidate screening
+# --------------------------------------------------------------------------
+#
+# Three outcomes, never two. A rejection must cite what failed and the
+# evidence - a prohibited term found as a whole word in a named field, or a
+# measured value past a stated limit - and that evidence is re-checked here.
+# Anything the code cannot substantiate is `uncertain`, and an uncertain
+# candidate stops paid generation until the operator reviews it. The
+# prohibited terms are inputs (a channel's BRAND.md); none are named here.
+
+ACCEPTED, REJECTED, UNCERTAIN = "accepted", "rejected", "uncertain"
+MUSIC_OUTCOMES = (ACCEPTED, REJECTED, UNCERTAIN)
+
+_TOKEN = re.compile(r"[a-z0-9]+")
+#: Words that negate a term immediately after them ("no <term>", "without
+#: <term>", "free of <term>", "non-<term>").
+_NEGATORS = frozenset({"no", "not", "without", "non", "zero", "free", "never", "nor",
+                       "avoid", "avoiding", "exclude", "excluding", "excludes"})
+#: ...and after it ("<term>-free").
+_POST_NEGATORS = frozenset({"free", "none", "excluded", "removed"})
+_NEGATION_WINDOW = 2
+_CLAUSE_BREAK = re.compile(r"[,;:.!?()\[\]{}|/\n]|\b(?:but|and|with|plus|then)\b")
+
+
+def _tokens(text: str) -> list[tuple[str, int, int]]:
+    return [(m.group(0), m.start(), m.end()) for m in _TOKEN.finditer(text.lower())]
+
+
+def find_prohibited_terms(text: Optional[str], terms: Any) -> list[dict[str, Any]]:
+    """Whole-word occurrences of ``terms`` in ``text``.
+
+    A term matches only as complete words (spacing and hyphenation are free;
+    the last word may take a plural ``s``/``es``), so ``sing`` never matches
+    inside ``phrasing`` and ``voice`` never inside ``invoice``. Each match says
+    whether it is negated ("no <term>", "<term>-free") within its own clause.
+    """
+    text = text or ""
+    tokens = _tokens(text)
+    words = [t[0] for t in tokens]
+    lowered = text.lower()
+    found: list[dict[str, Any]] = []
+    for term in terms:
+        parts = [t[0] for t in _tokens(str(term))]
+        if not parts:
+            continue
+        n = len(parts)
+        for i in range(len(words) - n + 1):
+            head_ok = words[i:i + n - 1] == parts[:-1]
+            last = words[i + n - 1]
+            if not head_ok or last not in (parts[-1], parts[-1] + "s", parts[-1] + "es"):
+                continue
+            start, end = tokens[i][1], tokens[i + n - 1][2]
+            found.append({
+                "term": str(term),
+                "matched_text": text[start:end],
+                "span": [start, end],
+                "negated": _is_negated(lowered, tokens, i, i + n - 1),
+            })
+    return found
+
+
+def _is_negated(lowered: str, tokens: list[tuple[str, int, int]], first: int, last: int) -> bool:
+    start, end = tokens[first][1], tokens[last][2]
+    clause_start = max((m.end() for m in _CLAUSE_BREAK.finditer(lowered, 0, start)), default=0)
+    before = [w for w, s, _ in tokens[max(0, first - _NEGATION_WINDOW):first] if s >= clause_start]
+    if any(w in _NEGATORS for w in before):
+        return True
+    brk = _CLAUSE_BREAK.search(lowered, end)
+    clause_end = brk.start() if brk else len(lowered)
+    after = [w for w, s, _ in tokens[last + 1:last + 1 + _NEGATION_WINDOW] if s < clause_end]
+    return any(w in _POST_NEGATORS for w in after)
+
+
+def _field_text(candidate: Mapping[str, Any], field: str) -> str:
+    value = candidate.get(field)
+    if isinstance(value, (list, tuple)):
+        return ", ".join(str(v) for v in value)
+    return "" if value is None else str(value)
+
+
+def screen_music_candidate(
+    candidate: Mapping[str, Any],
     *,
+    prohibited_terms: Any,
+    fields: Any = ("title", "tags"),
+    compliance_terms: Any = (),
+    measured_seconds: Optional[float] = None,
+    measurements: Optional[Mapping[str, Any]] = None,
+    thresholds: Optional[Mapping[str, Mapping[str, float]]] = None,
+) -> dict[str, Any]:
+    """The bounded, evidence-based screen for ONE candidate.
+
+    Returns ``outcome``: ``rejected`` (with ``failures`` citing each failed
+    criterion and its evidence), ``uncertain`` (with ``uncertainties``) or
+    ``passed``. ``passed`` is not acceptance: the creative evaluation still
+    decides (`decide_music_candidate`).
+
+    - ``prohibited_terms`` are matched as whole words in each of ``fields``;
+      a negated mention ("no vocals") is recorded but is not a failure.
+    - ``compliance_terms`` are metadata claims of compliance ("instrumental").
+      A prohibited term alongside one is contradictory metadata: uncertain.
+    - ``measured_seconds`` is the ffprobe length; without it the candidate is
+      uncertain (a failed probe proves nothing either way).
+    - ``thresholds`` maps a metric to ``{"max": x}`` and/or ``{"min": y}``;
+      a metric missing from ``measurements`` is uncertain, not a pass.
+    """
+    failures: list[dict[str, Any]] = []
+    uncertainties: list[dict[str, Any]] = []
+    negated: list[dict[str, Any]] = []
+    compliance: list[dict[str, Any]] = []
+    for field in fields:
+        text = _field_text(candidate, field)
+        for hit in find_prohibited_terms(text, prohibited_terms):
+            row = {"criterion": "prohibited_term", "field": field, **hit}
+            (negated if hit["negated"] else failures).append(row)
+        for hit in find_prohibited_terms(text, compliance_terms):
+            if not hit["negated"]:
+                compliance.append({"field": field, **hit})
+    if failures and compliance:
+        uncertainties.append({
+            "criterion": "contradictory_metadata",
+            "evidence": {"prohibited": failures, "compliance": compliance},
+        })
+        failures = []
+
+    if not measured_seconds:
+        uncertainties.append({"criterion": "duration_unmeasured",
+                              "evidence": {"path": candidate.get("path"),
+                                           "measured_seconds": measured_seconds}})
+    for metric, limit in (thresholds or {}).items():
+        value = (measurements or {}).get(metric)
+        if value is None:
+            uncertainties.append({"criterion": "measurement_missing",
+                                  "evidence": {"metric": metric}})
+            continue
+        for comparator in ("max", "min"):
+            bound = limit.get(comparator)
+            if bound is None:
+                continue
+            if (comparator == "max" and value > bound) or (comparator == "min" and value < bound):
+                failures.append({"criterion": "measurement", "metric": metric,
+                                 "value": value, "limit": bound, "comparator": comparator})
+
+    if uncertainties and not failures:
+        outcome = UNCERTAIN
+    elif failures:
+        outcome = REJECTED
+    else:
+        outcome = "passed"
+    return {
+        "outcome": outcome,
+        "failures": failures,
+        "uncertainties": uncertainties,
+        "negated_mentions": negated,
+        "compliance_mentions": compliance,
+        "fields_checked": list(fields),
+        "terms_checked": [str(t) for t in prohibited_terms],
+        "measured_seconds": measured_seconds,
+        "measurements": dict(measurements or {}),
+        "limitation": "metadata and measurement screen only; no vocal detector was run",
+    }
+
+
+def _verify_rejection(candidate: Mapping[str, Any], screen: Mapping[str, Any],
+                      evaluation: Mapping[str, Any],
+                      prohibited_terms: Any) -> Optional[str]:
+    """None when the evaluator's rejection is substantiated, else why not."""
+    criterion = evaluation.get("criterion")
+    evidence = evaluation.get("evidence")
+    if not criterion or not evidence:
+        return "rejection states no criterion and evidence"
+    if criterion == "prohibited_term":
+        if not isinstance(evidence, Mapping) or not evidence.get("field") or not evidence.get("term"):
+            return "a prohibited_term rejection must name the field and the term"
+        if str(evidence["term"]).lower() not in {str(t).lower() for t in prohibited_terms}:
+            return f"{evidence['term']!r} is not on the prohibited list"
+        hits = find_prohibited_terms(_field_text(candidate, evidence["field"]), [evidence["term"]])
+        if not any(not h["negated"] for h in hits):
+            return (f"{evidence['term']!r} does not occur as a whole, un-negated word in "
+                    f"{evidence['field']!r}")
+        return None
+    if criterion == "measurement":
+        if not isinstance(evidence, Mapping):
+            return "a measurement rejection must give metric, value, limit and comparator"
+        metric, value = evidence.get("metric"), evidence.get("value")
+        limit, comparator = evidence.get("limit"), evidence.get("comparator")
+        if metric is None or value is None or limit is None or comparator not in ("max", "min"):
+            return "a measurement rejection must give metric, value, limit and comparator"
+        measured = (screen.get("measurements") or {}).get(metric)
+        if measured is not None and abs(float(measured) - float(value)) > 0.05:
+            return f"{metric} was measured at {measured}, not {value}"
+        if (comparator == "max" and not value > limit) or (comparator == "min" and not value < limit):
+            return f"{metric}={value} does not fail its {comparator} limit {limit}"
+        return None
+    if criterion == "creative":
+        return None  # a stated creative judgement with its observation
+    return f"unknown rejection criterion {criterion!r}"
+
+
+def decide_music_candidate(
+    candidate: Mapping[str, Any],
+    screen: Mapping[str, Any],
+    evaluation: Optional[Mapping[str, Any]],
+    *,
+    prohibited_terms: Any,
+) -> dict[str, Any]:
+    """Combine the bounded screen with the caller's technical/creative evaluation.
+
+    ``evaluation`` is ``{"outcome", "criterion", "evidence", "reason"}`` (or
+    the older ``{"accepted", "reason"}``). Accepted only when the screen passed
+    AND the evaluation accepts. A rejection counts only when the screen or the
+    evaluation substantiates it; an unsubstantiated or contradictory result is
+    uncertain.
+    """
+    base = {"index": candidate.get("index"), "screen": dict(screen)}
+    if evaluation is None and screen["outcome"] == REJECTED:
+        return {**base, "outcome": REJECTED, "criterion": screen["failures"][0]["criterion"],
+                "evidence": screen["failures"], "reason": "failed the screen"}
+    if evaluation is None:
+        return {**base, "outcome": UNCERTAIN, "criterion": "no_evaluation",
+                "reason": "the candidate was not evaluated"}
+    claimed = evaluation.get("outcome") or (ACCEPTED if evaluation.get("accepted") else REJECTED)
+    if claimed not in MUSIC_OUTCOMES:
+        return {**base, "outcome": UNCERTAIN, "criterion": "invalid_evaluation",
+                "reason": f"evaluation outcome {claimed!r} is not one of {MUSIC_OUTCOMES}"}
+    reason = evaluation.get("reason") or ""
+
+    if screen["outcome"] == REJECTED:
+        if claimed == ACCEPTED:
+            return {**base, "outcome": UNCERTAIN, "criterion": "contradictory_result",
+                    "evidence": screen["failures"],
+                    "reason": "the evaluation accepts a candidate the screen rejects"}
+        return {**base, "outcome": REJECTED, "criterion": screen["failures"][0]["criterion"],
+                "evidence": screen["failures"], "reason": reason or "failed the screen"}
+    if screen["outcome"] == UNCERTAIN:
+        return {**base, "outcome": UNCERTAIN, "criterion": screen["uncertainties"][0]["criterion"],
+                "evidence": screen["uncertainties"], "reason": reason}
+    if claimed == ACCEPTED:
+        return {**base, "outcome": ACCEPTED, "criterion": evaluation.get("criterion") or "passed",
+                "evidence": evaluation.get("evidence"), "reason": reason}
+    if claimed == UNCERTAIN:
+        return {**base, "outcome": UNCERTAIN, "criterion": evaluation.get("criterion") or "evaluation_uncertain",
+                "evidence": evaluation.get("evidence"), "reason": reason}
+    problem = _verify_rejection(candidate, screen, evaluation, prohibited_terms)
+    if problem:
+        return {**base, "outcome": UNCERTAIN, "criterion": "unsubstantiated_rejection",
+                "evidence": {"claimed": dict(evaluation), "problem": problem},
+                "reason": f"rejection not substantiated: {problem}"}
+    return {**base, "outcome": REJECTED, "criterion": evaluation["criterion"],
+            "evidence": evaluation["evidence"], "reason": reason}
+
+
+# --------------------------------------------------------------------------
+# Paid music: approved limits, durable progress, authorisation, recovery
+# --------------------------------------------------------------------------
+#
+# Progress is never taken from the caller. It is rebuilt, before every paid
+# request, from four durable records that must agree: `cost_log.json` (every
+# reserved or executed call), the music ledger (`work/paid_music_ledger.json`,
+# written before and after every call), the files on disk with the tool's
+# pending-task records beside them, and the asset manifest when one exists.
+
+MUSIC_LEDGER = Path("work") / "paid_music_ledger.json"
+_MUSIC_OPERATION = re.compile(r"^music generation (\d+)$")
+#: What follows the programme's base stem in any file one request wrote -
+#: a candidate, a tool's task record, a partial download.
+_REQUEST_FILE = re.compile(r"^_g(\d{2,})(?:__cand\d+)?(?:\.|$)")
+_MEASURE_TOLERANCE_S = 0.5
+
+
+class MusicLimitsUnavailable(BudgetNotApproved):
+    """The approved proposal does not state a usable music plan."""
+
+
+def approved_music_limits(proposal_packet: Mapping[str, Any], tool_name: str) -> dict[str, Any]:
+    """Target, request ceiling and USD allocation for ``tool_name`` - from the approval.
+
+    - target: ``metadata.paid_audio_plan.music.unique_music_seconds``
+    - ceiling: the approved ``cost_estimate`` line quantities for the tool
+      (base generations + retry allowance), cross-checked against the plan
+    - allocation: the approved line items' USD for this tool only, so music
+      can never spend what the estimate set aside for another tool (SFX)
+    """
+    approval = proposal_packet.get("approval") or {}
+    if approval.get("status") not in _APPROVED:
+        raise BudgetNotApproved(f"proposal approval is {approval.get('status')!r}")
+    plan = ((proposal_packet.get("metadata") or {}).get("paid_audio_plan") or {}).get("music")
+    if not plan or plan.get("tool") != tool_name:
+        raise MusicLimitsUnavailable(
+            f"the approved proposal has no paid_audio_plan.music for {tool_name!r}")
+    items = [i for i in ((proposal_packet.get("cost_estimate") or {}).get("line_items") or [])
+             if i.get("tool") == tool_name]
+    base = sum(int(i.get("quantity", 0)) for i in items if i.get("operation") == "music generation")
+    retry = sum(int(i.get("quantity", 0)) for i in items
+                if i.get("operation") == "music retry/rejection allowance")
+    if base < 1:
+        raise MusicLimitsUnavailable(f"the approved estimate has no music generation line for {tool_name!r}")
+    if (int(plan.get("base_requests", base)), int(plan.get("retry_requests", retry))) != (base, retry):
+        raise MusicLimitsUnavailable(
+            f"approved plan says {plan.get('base_requests')}+{plan.get('retry_requests')} requests "
+            f"but the approved estimate says {base}+{retry}; the proposal contradicts itself")
+    return {
+        "tool": tool_name,
+        "target_seconds": float(plan["unique_music_seconds"]),
+        "seconds_per_generation": float(plan["seconds_per_generation"]),
+        "base_requests": base,
+        "retry_requests": retry,
+        "max_requests": base + retry,
+        "allocation_usd": round(sum(float(i.get("estimated_usd", 0)) for i in items), 4),
+        "usd_per_request": float(plan["usd_per_request"]),
+        "approved_budget_usd": float(approval.get("approved_budget_usd") or 0.0),
+    }
+
+
+def _write_json_atomic(path: Path, data: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def load_music_ledger(project_dir: Path) -> dict[str, Any]:
+    path = Path(project_dir) / MUSIC_LEDGER
+    if not path.exists():
+        return {"version": 1, "requests": [], "reviews": []}
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _save_music_ledger(project_dir: Path, ledger: Mapping[str, Any]) -> None:
+    _write_json_atomic(Path(project_dir) / MUSIC_LEDGER, ledger)
+
+
+def _request_path(base: Path, n: int) -> Path:
+    return base.with_name(f"{base.stem}_g{n:02d}{base.suffix}")
+
+
+def _safe_probe(probe: Any, path: Optional[str]) -> Optional[float]:
+    if not path or not Path(path).exists():
+        return None
+    try:
+        value = probe(path)
+    except Exception:
+        return None
+    return float(value) if value else None
+
+
+def _music_cost_entries(entries: list[Mapping[str, Any]], tool_name: str) -> dict[int, list]:
+    by_request: dict[int, list] = {}
+    for entry in entries:
+        match = _MUSIC_OPERATION.match(str(entry.get("operation", "")))
+        if entry.get("tool") == tool_name and match:
+            by_request.setdefault(int(match.group(1)), []).append(entry)
+    return by_request
+
+
+def _reviews_for(ledger: Mapping[str, Any], n: int) -> list[Mapping[str, Any]]:
+    return [r for r in ledger.get("reviews", []) if r.get("request") == n]
+
+
+def _resolved_candidates(request: Mapping[str, Any],
+                         reviews: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """The request's candidate decisions with operator resolutions applied."""
+    resolutions: dict[int, Mapping[str, Any]] = {}
+    for review in reviews:
+        for key, value in (review.get("resolutions") or {}).items():
+            resolutions[int(key)] = value
+    rows = []
+    for cand in request.get("candidates") or []:
+        row = dict(cand)
+        if cand.get("index") in resolutions:
+            res = resolutions[cand["index"]]
+            row.update(outcome=res["outcome"], criterion="operator_review",
+                       reason=res.get("reason", ""), reviewed=True)
+        rows.append(row)
+    return rows
+
+
+def _asset_manifest(project_dir: Path) -> Optional[Mapping[str, Any]]:
+    path = Path(project_dir) / "checkpoint_assets.json"
+    if not path.exists():
+        return None
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return (data.get("artifacts") or {}).get("asset_manifest")
+
+
+def reconcile_music_progress(
+    *,
+    project_dir: Path,
+    tool: Any,
+    cost_entries: list[Mapping[str, Any]],
+    output_base: Optional[Path] = None,
+    probe: Optional[Any] = None,
+    asset_manifest: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """Paid-music progress rebuilt from durable records - never from the caller.
+
+    Returns ``requests_made`` (every call that was reserved or executed),
+    ``accepted_seconds`` (accepted candidates, re-measured on disk),
+    ``spent_usd`` for this tool, ``recoverable`` (billed tasks with a
+    ``task_id`` the free ``fetch`` can recover), ``issues`` (records that
+    disagree, or a charge whose outcome is unknown) and ``review`` (why the
+    next paid call needs the operator first, if it does).
+    """
+    if probe is None:
+        from tools.analysis.audio_probe import probe_duration as probe
+    project_dir = Path(project_dir)
+    ledger = load_music_ledger(project_dir)
+    if output_base is None and ledger.get("output_base"):
+        output_base = Path(ledger["output_base"])
+    requests = {int(r["request"]): r for r in ledger.get("requests", [])}
+    costs = _music_cost_entries(cost_entries, tool.name)
+    read_record = getattr(tool, "pending_task_record", None)
+    issues: list[dict[str, Any]] = []
+    recoverable: list[dict[str, Any]] = []
+    executed: list[int] = []
+    accepted_seconds = 0.0
+    accepted_paths: set[str] = set()
+    not_accepted_paths: set[str] = set()
+
+    known = set(requests) | set(costs)
+    if output_base is not None and output_base.parent.exists():
+        for path in output_base.parent.glob(f"{output_base.stem}_g*"):
+            match = _REQUEST_FILE.match(path.name[len(output_base.stem):])
+            if match and int(match.group(1)) not in known:
+                issues.append({"issue": "unrecorded_paid_audio_file", "path": str(path),
+                               "detail": "a generated file exists that no cost entry or "
+                                         "ledger request accounts for"})
+
+    for n in sorted(known):
+        req = requests.get(n)
+        entries = [e for e in costs.get(n, []) if e.get("status") != "refunded"]
+        charged = _reviews_charge(ledger, n)
+        out = Path(req["output_path"]) if req and req.get("output_path") else (
+            _request_path(output_base, n) if output_base is not None else None)
+        record = read_record(out) if (read_record and out is not None) else None
+        task_id = (req or {}).get("task_id") or (record or {}).get("task_id") or charged.get("task_id")
+
+        if len(entries) > 1:
+            issues.append({"issue": "duplicate_cost_entries", "request": n,
+                           "entries": [e.get("id") for e in entries]})
+        if not entries:
+            if req and req.get("status") not in ("submitting", "not_executed"):
+                issues.append({"issue": "ledger_request_without_cost_entry", "request": n})
+            elif record and record.get("status") != "submitting":
+                issues.append({"issue": "provider_task_without_cost_entry", "request": n,
+                               "task_id": task_id})
+            continue
+        executed.append(n)
+        entry = entries[-1]
+        status = (req or {}).get("status")
+
+        if status == "completed":
+            cost = float((req or {}).get("cost_usd") or 0.0)
+            if entry.get("status") == "reserved" or abs(float(entry.get("actual_usd", 0.0)) - cost) > 1e-6:
+                issues.append({"issue": "ledger_cost_disagrees_with_cost_log", "request": n,
+                               "ledger_usd": cost, "cost_log": {k: entry.get(k) for k in
+                                                                ("status", "actual_usd")}})
+            for cand in _resolved_candidates(req, _reviews_for(ledger, n)):
+                if cand.get("outcome") != ACCEPTED:
+                    if cand.get("path"):
+                        not_accepted_paths.add(str(Path(cand["path"])))
+                    continue
+                measured = _safe_probe(probe, cand.get("path"))
+                recorded = cand.get("measured_seconds")
+                if measured is None:
+                    issues.append({"issue": "accepted_file_missing_or_unmeasurable", "request": n,
+                                   "path": cand.get("path")})
+                    continue
+                if recorded is not None and abs(measured - float(recorded)) > _MEASURE_TOLERANCE_S:
+                    issues.append({"issue": "accepted_file_changed", "request": n,
+                                   "path": cand.get("path"), "recorded_seconds": recorded,
+                                   "measured_seconds": measured})
+                    continue
+                accepted_seconds += measured
+                accepted_paths.add(str(Path(cand["path"])))
+            continue
+
+        interrupted = entry.get("status") == "reserved" or status in (None, "submitting")
+        billed_unfetched = status == "failed" and (req or {}).get("charge_status") == "charged" \
+            and not (req or {}).get("candidates")
+        if (interrupted or billed_unfetched) and task_id:
+            recoverable.append({"request": n, "task_id": task_id, "output_path": str(out),
+                                "cost_entry_id": entry.get("id"),
+                                "cost_entry_status": entry.get("status"),
+                                "reason": "interrupted" if interrupted else "billed_not_downloaded"})
+        elif interrupted:
+            if charged.get("charge_outcome"):
+                continue  # the operator established the outcome; nothing to recover
+            if entry.get("status") == "reserved":
+                issues.append({"issue": "charge_outcome_unknown", "request": n,
+                               "cost_entry": {k: entry.get(k) for k in ("id", "status")},
+                               "detail": "a paid call was started but no task_id was recorded; "
+                                         "check the provider's logs and record the outcome with "
+                                         "record_music_review(..., charge_outcome=...)"})
+            else:
+                issues.append({"issue": "paid_request_not_in_ledger", "request": n,
+                               "cost_entry": {k: entry.get(k) for k in ("id", "status", "actual_usd")},
+                               "detail": "cost_log records this paid call but the music ledger "
+                                         "holds no result or task_id for it, so its candidates "
+                                         "cannot be counted; the operator must review it"})
+        elif status == "failed" and (req or {}).get("charge_status") in (None, "unknown") \
+                and not charged.get("charge_outcome"):
+            issues.append({"issue": "charge_outcome_unknown", "request": n,
+                           "detail": (req or {}).get("error") or "provider failure"})
+
+    manifest = asset_manifest if asset_manifest is not None else _asset_manifest(project_dir)
+    for asset in (manifest or {}).get("assets") or []:
+        if asset.get("source_tool") != tool.name or asset.get("type") != "music":
+            continue
+        path = str(Path(asset.get("path", "")))
+        if path in accepted_paths:
+            continue
+        issues.append({"issue": "manifest_music_not_accepted_in_ledger", "asset": asset.get("id"),
+                       "path": asset.get("path"),
+                       "detail": "rejected or uncertain in the ledger" if path in not_accepted_paths
+                       else "no ledger record accepts this file"})
+
+    spent = sum(float(e.get("actual_usd", 0.0)) + float(e.get("reserved_usd", 0.0))
+                for n in costs for e in costs[n] if e.get("status") != "refunded")
+    return {
+        "requests_made": len(executed),
+        "last_request": max(executed, default=0),
+        "next_request": max(known, default=0) + 1,
+        "accepted_seconds": round(accepted_seconds, 3),
+        "spent_usd": round(spent, 4),
+        "recoverable": recoverable,
+        "issues": issues,
+        "review": _pending_review(ledger, requests, max(executed, default=0)),
+        "ledger": ledger,
+    }
+
+
+def _reviews_charge(ledger: Mapping[str, Any], n: int) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for review in _reviews_for(ledger, n):
+        for key in ("charge_outcome", "task_id"):
+            if review.get(key):
+                out[key] = review[key]
+    return out
+
+
+def _pending_review(ledger: Mapping[str, Any], requests: Mapping[int, Mapping[str, Any]],
+                    last: int) -> Optional[dict[str, Any]]:
+    """Why the last completed request needs the operator before another call."""
+    req = requests.get(last)
+    if not req:
+        return None
+    reviews = _reviews_for(ledger, last)
+    authorised = any(r.get("authorize_next_request") for r in reviews)
+    if req.get("status") != "completed":
+        return {"request": last, "reasons": [], "authorised": authorised, "blocking": False}
+    cands = _resolved_candidates(req, reviews)
+    reasons = []
+    if any(c.get("outcome") == UNCERTAIN for c in cands):
+        reasons.append("uncertain_candidates")
+    if cands and all(c.get("outcome") == REJECTED for c in cands):
+        reasons.append("all_candidates_rejected")
+    if req.get("charge_verification") == "unverified":
+        reasons.append("charge_unverified")
+    return {"request": last, "reasons": reasons, "authorised": authorised,
+            "blocking": bool(reasons) and not authorised}
+
+
+def record_music_review(
+    project_dir: Path,
+    *,
+    request: int,
+    reviewer: str,
+    note: str,
+    resolutions: Optional[Mapping[int, Mapping[str, Any]]] = None,
+    authorize_next_request: bool = False,
+    charge_outcome: Optional[str] = None,
+    task_id: Optional[str] = None,
+) -> dict[str, Any]:
+    """Record an explicit operator decision about paid request ``request``.
+
+    Call this only with what the operator actually decided in chat.
+    ``resolutions`` settle uncertain candidates (``{index: {"outcome":
+    "accepted" | "rejected", "reason"}}``); ``authorize_next_request`` permits
+    ONE further paid request after it; ``charge_outcome`` (``charged`` /
+    ``not_charged``) and ``task_id`` settle a call whose charge was unknown.
+    """
+    for index, res in (resolutions or {}).items():
+        if res.get("outcome") not in (ACCEPTED, REJECTED) or not res.get("reason"):
+            raise ValueError(f"resolution for candidate {index} needs outcome accepted|rejected "
+                             "and the operator's reason")
+    if charge_outcome not in (None, "charged", "not_charged"):
+        raise ValueError("charge_outcome must be 'charged' or 'not_charged'")
+    if not reviewer or not note:
+        raise ValueError("a review records who decided and what they said")
+    ledger = load_music_ledger(project_dir)
+    review = {
+        "request": int(request), "reviewer": reviewer, "note": note,
+        "resolutions": {str(k): dict(v) for k, v in (resolutions or {}).items()},
+        "authorize_next_request": bool(authorize_next_request),
+        "charge_outcome": charge_outcome, "task_id": task_id,
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
+    }
+    ledger.setdefault("reviews", []).append(review)
+    _save_music_ledger(project_dir, ledger)
+    return review
+
+
+def authorize_music_request(
+    *,
+    state: Mapping[str, Any],
+    limits: Mapping[str, Any],
     tracker: Any,
     tool: Any,
     inputs: Mapping[str, Any],
-    target_seconds: float,
+    max_requests: Optional[int] = None,
+    claimed_requests_made: Optional[int] = None,
+    claimed_accepted_seconds: Optional[float] = None,
+) -> dict[str, Any]:
+    """Whether ONE more paid music request is permitted, and every fact behind it.
+
+    Each fact is established independently: the approved target and ceiling
+    (`approved_music_limits`), measured accepted seconds and previous
+    requests (`reconcile_music_progress`), actual spend against this tool's
+    own approved allocation and the tracker's remaining cap, and the need.
+    A caller's claim may only be confirmed by the records, never override
+    them; ``max_requests`` may lower the approved ceiling, never raise it.
+    """
+    ceiling = limits["max_requests"] if max_requests is None else min(int(max_requests),
+                                                                      limits["max_requests"])
+    remaining = max(0.0, limits["target_seconds"] - state["accepted_seconds"])
+    spent = state["spent_usd"]
+    checks: dict[str, Any] = {
+        "target_seconds": limits["target_seconds"],
+        "accepted_seconds": state["accepted_seconds"],
+        "remaining_seconds": round(remaining, 3),
+        "requests_made": state["requests_made"],
+        "max_requests": ceiling,
+        "base_requests": limits["base_requests"],
+        "tool_allocation_usd": limits["allocation_usd"],
+        "tool_spent_usd": spent,
+        "tool_allocation_remaining_usd": round(limits["allocation_usd"] - spent, 4),
+        "budget_spent_usd": round(tracker.budget_spent_usd, 4),
+        "usable_budget_usd": round(tracker.usable_budget_usd, 4),
+    }
+
+    def stop(reason: str, **detail: Any) -> dict[str, Any]:
+        return {"generate": False, "reason": reason, "checks": checks, **detail}
+
+    contradictions = {}
+    if claimed_requests_made is not None and int(claimed_requests_made) != state["requests_made"]:
+        contradictions["requests_made"] = {"claimed": claimed_requests_made,
+                                           "recorded": state["requests_made"]}
+    if claimed_accepted_seconds is not None and \
+            abs(float(claimed_accepted_seconds) - state["accepted_seconds"]) > _MEASURE_TOLERANCE_S:
+        contradictions["accepted_seconds"] = {"claimed": claimed_accepted_seconds,
+                                              "recorded": state["accepted_seconds"]}
+    if contradictions:
+        return stop("caller_state_contradicts_records", detail=contradictions)
+    if state["issues"]:
+        return stop("records_inconsistent", detail=state["issues"])
+    if state["recoverable"]:
+        return stop("recovery_required", detail=state["recoverable"])
+    if remaining <= 0:
+        return stop("target_met")
+    review = state.get("review") or {}
+    if review.get("blocking"):
+        return stop("operator_review_required", detail=review)
+    if state["requests_made"] >= ceiling:
+        return stop("request_ceiling_reached")
+    if state["requests_made"] >= limits["base_requests"] and not review.get("authorised"):
+        return stop("retry_requires_operator_authorization",
+                    detail={"next_request": state["requests_made"] + 1,
+                            "base_requests": limits["base_requests"]})
+    requested = inputs.get("duration_seconds")
+    if requested is None or abs(float(requested) - limits["seconds_per_generation"]) > 1e-6:
+        return stop("request_length_differs_from_approved_plan",
+                    detail={"requested": requested,
+                            "approved": limits["seconds_per_generation"]})
+    try:
+        cost = _unit_cost(tool, inputs)
+    except PaidCostUnavailable as exc:
+        return stop("unpriced", detail=str(exc))
+    checks["next_call_usd"] = cost
+    if cost > limits["allocation_usd"] - spent + 1e-9:
+        return stop("tool_allocation_exhausted")
+    if cost > tracker.usable_budget_usd + 1e-9:
+        return stop("budget_would_be_exceeded")
+    return {"generate": True, "reason": "more_accepted_music_needed", "checks": checks}
+
+
+def _process_candidates(
+    *, candidates: list[Mapping[str, Any]], screen: Mapping[str, Any],
+    evaluate: Any, probe: Any,
+) -> list[dict[str, Any]]:
+    rows = []
+    for cand in candidates:
+        cand = dict(cand)
+        measured = _safe_probe(probe, cand.get("path")) if cand.get("downloaded") else None
+        measurements = None
+        if screen.get("thresholds") and cand.get("downloaded"):
+            try:
+                measurements = screen["measure"](cand["path"])
+            except Exception:
+                measurements = None
+        cand["measured_seconds"] = measured
+        cand["screen"] = screen_music_candidate(
+            cand, prohibited_terms=screen["prohibited_terms"],
+            fields=screen.get("fields", ("title", "tags")),
+            compliance_terms=screen.get("compliance_terms", ()),
+            measured_seconds=measured, measurements=measurements,
+            thresholds=screen.get("thresholds"),
+        )
+        rows.append(cand)
+    try:
+        evaluations = evaluate(rows) or {}
+    except Exception as exc:  # an evaluation that fails decides nothing
+        evaluations = {c["index"]: {"outcome": UNCERTAIN, "criterion": "evaluation_failed",
+                                    "reason": str(exc)} for c in rows}
+    out = []
+    for cand in rows:
+        decision = decide_music_candidate(cand, cand["screen"], evaluations.get(cand["index"]),
+                                          prohibited_terms=screen["prohibited_terms"])
+        accepted = decision["outcome"] == ACCEPTED
+        out.append({
+            "index": cand["index"], "path": cand.get("path"), "title": cand.get("title"),
+            "tags": cand.get("tags"), "downloaded": bool(cand.get("downloaded")),
+            "provider_reported_seconds": cand.get("duration_seconds"),
+            "measured_seconds": cand["measured_seconds"],
+            "outcome": decision["outcome"], "criterion": decision.get("criterion"),
+            "evidence": decision.get("evidence"), "reason": decision.get("reason", ""),
+            "screen": cand["screen"],
+            "accepted_seconds": cand["measured_seconds"] if accepted else 0.0,
+        })
+    return out
+
+
+def _validate_screen(screen: Optional[Mapping[str, Any]]) -> Mapping[str, Any]:
+    if not screen or "prohibited_terms" not in screen:
+        raise ValueError(
+            "screen must state prohibited_terms (from the channel's BRAND.md) - "
+            "paid music is never generated without a bounded screen")
+    if screen.get("thresholds") and not callable(screen.get("measure")):
+        raise ValueError("screen.thresholds needs screen.measure(path) -> {metric: value}")
+    return screen
+
+
+def generate_music_programme(
+    *,
+    project_dir: Path,
+    proposal_packet: Mapping[str, Any],
+    tracker: Any,
+    tool: Any,
+    inputs: Mapping[str, Any],
     evaluate: Any,
-    max_requests: int,
-    accepted_seconds: float = 0.0,
-    requests_made: int = 0,
+    screen: Mapping[str, Any],
+    max_requests: Optional[int] = None,
+    accepted_seconds: Optional[float] = None,
+    requests_made: Optional[int] = None,
     probe: Optional[Any] = None,
 ) -> dict[str, Any]:
-    """Generate until the accepted unique-music target is met - and no further.
+    """Generate until the approved unique-music target is met - and no further.
 
-    Every call goes through ``tracker.run_tool`` (estimate, reserve, execute,
-    reconcile). ``evaluate(candidates) -> {index: {"accepted", "reason"}}`` is
-    the caller's screening of every candidate. Stops on: target met, request
-    ceiling, budget, a refused reservation, a pricing mismatch, or a provider
-    failure - it never retries a failure on its own. ``accepted_seconds`` and
-    ``requests_made`` resume a programme started in an earlier session.
+    Before EVERY paid request, progress is rebuilt from the project's durable
+    records (`reconcile_music_progress`) and the request is authorised against
+    the approved proposal (`authorize_music_request`). A billed task that was
+    interrupted is recovered with the tool's free ``fetch`` first, never paid
+    for again. Every candidate goes through the bounded screen and the
+    caller's ``evaluate(candidates) -> {index: evaluation}``.
+
+    Stops - and makes no further paid call - on: target met; a request whose
+    candidates are all rejected or any uncertain (operator review); a request
+    from the retry allowance without operator authorisation; the approved
+    request ceiling; this tool's approved allocation or the budget cap; a
+    refused reservation; a pricing mismatch; a provider failure; records that
+    disagree; a charge whose outcome is unknown; or a caller's
+    ``requests_made`` / ``accepted_seconds`` that the records contradict.
     """
     from tools.cost_tracker import ApprovalRequiredError, BudgetExceededError
 
+    if probe is None:
+        from tools.analysis.audio_probe import probe_duration as probe
+    screen = _validate_screen(screen)
+    project_dir = Path(project_dir)
+    limits = approved_music_limits(proposal_packet, tool.name)
     base = Path(inputs["output_path"])
+    ledger = load_music_ledger(project_dir)
+    if ledger.get("output_base") and Path(ledger["output_base"]) != base:
+        raise ValueError(f"this programme writes to {ledger['output_base']}, not {base}")
+    ledger.update(tool=tool.name, output_base=str(base), limits=limits)
+    _save_music_ledger(project_dir, ledger)
+
     generations: list[dict[str, Any]] = []
+    attempted_recovery: set[int] = set()
+    claimed = {"claimed_requests_made": requests_made, "claimed_accepted_seconds": accepted_seconds}
     stop: dict[str, Any] = {}
     while True:
-        decision = next_music_request(
-            target_seconds=target_seconds, accepted_seconds=accepted_seconds,
-            tracker=tracker, tool=tool, inputs=inputs,
-            requests_made=requests_made, max_requests=max_requests,
-        )
+        _settle_reviewed_charges(project_dir, tracker, tool.name)
+        state = reconcile_music_progress(project_dir=project_dir, tool=tool,
+                                         cost_entries=tracker.entries, output_base=base,
+                                         probe=probe)
+        pending = [r for r in state["recoverable"] if r["request"] not in attempted_recovery]
+        if pending and not state["issues"] and not claimed_contradiction(state, claimed):
+            item = pending[0]
+            attempted_recovery.add(item["request"])
+            outcome = _recover_music_request(project_dir=project_dir, tracker=tracker, tool=tool,
+                                             inputs=inputs, item=item, screen=screen,
+                                             evaluate=evaluate, probe=probe)
+            generations.append(outcome)
+            if not outcome.get("success"):
+                stop = {"generate": False, "reason": "recovery_failed", "detail": outcome}
+                break
+            continue
+
+        decision = authorize_music_request(state=state, limits=limits, tracker=tracker, tool=tool,
+                                           inputs=inputs, max_requests=max_requests, **claimed)
+        claimed = {"claimed_requests_made": None, "claimed_accepted_seconds": None}
         if not decision["generate"]:
             stop = decision
             break
-        n = requests_made + 1
-        call_inputs = {**dict(inputs),
-                       "output_path": str(base.with_name(f"{base.stem}_g{n:02d}{base.suffix}"))}
+
+        n = state["next_request"]
+        out = _request_path(base, n)
+        operation = f"music generation {n}"
+        ledger = load_music_ledger(project_dir)
+        ledger["requests"].append({
+            "request": n, "operation": operation, "output_path": str(out),
+            "status": "submitting", "authorization": decision["checks"],
+            "started_at": datetime.now(timezone.utc).isoformat(),
+        })
+        _save_music_ledger(project_dir, ledger)
         try:
-            result = tracker.run_tool(tool, call_inputs, operation=f"music generation {n}")
+            result = tracker.run_tool(tool, {**dict(inputs), "output_path": str(out)},
+                                      operation=operation)
         except (BudgetExceededError, ApprovalRequiredError) as exc:
+            _update_request(project_dir, n, status="not_executed", detail=str(exc))
             stop = {**decision, "generate": False, "reason": "reservation_refused",
                     "detail": str(exc)}
             break
-        requests_made = n
-        record: dict[str, Any] = {"request": n, "success": result.success,
-                                  "cost_usd": result.cost_usd,
-                                  "task_id": (result.data or {}).get("task_id")}
-        if result.success:
-            cands = (result.data or {}).get("candidates") or []
-            accounted = account_music_candidates(cands, evaluate(cands), probe=probe)
-            accepted_seconds += accounted["accepted_seconds"]
-            record.update(accounted)
+        except Exception as exc:
+            _update_request(project_dir, n, status="failed", charge_status="unknown",
+                            error=f"{type(exc).__name__}: {exc}",
+                            cost_usd=_entry_for(tracker, operation).get("actual_usd"))
+            stop = {"generate": False, "reason": "provider_exception", "detail": str(exc)}
+            break
+        record = _record_result(project_dir=project_dir, tracker=tracker, n=n,
+                                operation=operation, result=result, screen=screen,
+                                evaluate=evaluate, probe=probe)
         generations.append(record)
         if (result.data or {}).get("pricing_mismatch"):
             stop = {"generate": False, "reason": "pricing_mismatch",
@@ -685,12 +1507,123 @@ def generate_music_programme(
         if not result.success:
             stop = {"generate": False, "reason": "provider_failure", "detail": result.error}
             break
+
+    final = reconcile_music_progress(project_dir=project_dir, tool=tool,
+                                     cost_entries=tracker.entries, output_base=base, probe=probe)
     return {
-        "target_seconds": float(target_seconds),
-        "accepted_seconds": round(accepted_seconds, 3),
-        "remaining_seconds": round(max(0.0, float(target_seconds) - accepted_seconds), 3),
-        "requests_made": requests_made,
+        "target_seconds": limits["target_seconds"],
+        "accepted_seconds": final["accepted_seconds"],
+        "remaining_seconds": round(max(0.0, limits["target_seconds"] - final["accepted_seconds"]), 3),
+        "requests_made": final["requests_made"],
         "spent_usd": round(tracker.budget_spent_usd, 4),
+        "tool_spent_usd": final["spent_usd"],
+        "limits": limits,
         "stop": stop,
         "generations": generations,
+        "ledger_path": str(project_dir / MUSIC_LEDGER),
     }
+
+
+def _settle_reviewed_charges(project_dir: Path, tracker: Any, tool_name: str) -> None:
+    """Close reservations whose charge outcome the operator has now established."""
+    ledger = load_music_ledger(project_dir)
+    costs = _music_cost_entries(tracker.entries, tool_name)
+    for n, entries in costs.items():
+        outcome = _reviews_charge(ledger, n).get("charge_outcome")
+        for entry in entries:
+            if not outcome or entry.get("status") != "reserved":
+                continue
+            note = f"charge outcome recorded by operator review: {outcome}"
+            entry["details"] = "; ".join(filter(None, [entry.get("details"), note]))
+            if outcome == "charged":
+                tracker.reconcile(entry["id"], float(entry.get("estimated_usd", 0.0)), success=True)
+            else:
+                tracker.refund(entry["id"], reason=note)
+
+
+def claimed_contradiction(state: Mapping[str, Any], claimed: Mapping[str, Any]) -> bool:
+    made = claimed.get("claimed_requests_made")
+    secs = claimed.get("claimed_accepted_seconds")
+    return (made is not None and int(made) != state["requests_made"]) or (
+        secs is not None and abs(float(secs) - state["accepted_seconds"]) > _MEASURE_TOLERANCE_S)
+
+
+def _entry_for(tracker: Any, operation: str) -> dict[str, Any]:
+    return next((e for e in reversed(tracker.entries)
+                 if e.get("operation") == operation and e.get("status") != "refunded"), {})
+
+
+def _update_request(project_dir: Path, n: int, **fields: Any) -> dict[str, Any]:
+    ledger = load_music_ledger(project_dir)
+    req = next(r for r in ledger["requests"] if int(r["request"]) == n)
+    req.update(fields)
+    req["updated_at"] = datetime.now(timezone.utc).isoformat()
+    _save_music_ledger(project_dir, ledger)
+    return req
+
+
+def _record_result(*, project_dir: Path, tracker: Any, n: int, operation: str, result: Any,
+                   screen: Mapping[str, Any], evaluate: Any, probe: Any,
+                   recovered: bool = False) -> dict[str, Any]:
+    data = result.data or {}
+    entry = _entry_for(tracker, operation)
+    fields: dict[str, Any] = {
+        "status": "completed" if result.success else "failed",
+        "task_id": data.get("task_id"),
+        "charge_status": data.get("charge_status"),
+        "cost_usd": entry.get("actual_usd", result.cost_usd),
+        "cost_entry_id": entry.get("id"),
+    }
+    check = data.get("pricing_check") or {}
+    if check.get("status") == "unverified":
+        fields["charge_verification"] = "unverified"
+    if recovered:
+        fields["recovered"] = True
+    if result.success:
+        cands = _process_candidates(candidates=data.get("candidates") or [], screen=screen,
+                                    evaluate=evaluate, probe=probe)
+        fields["candidates"] = cands
+        fields["accepted_seconds"] = round(sum(c["accepted_seconds"] for c in cands), 3)
+    else:
+        fields["error"] = result.error
+    req = _update_request(project_dir, n, **fields)
+    return {"request": n, "success": bool(result.success), "cost_usd": fields["cost_usd"],
+            "task_id": fields["task_id"], "recovered": recovered,
+            "accepted_seconds": fields.get("accepted_seconds", 0.0),
+            "candidates": req.get("candidates", [])}
+
+
+def _recover_music_request(*, project_dir: Path, tracker: Any, tool: Any,
+                           inputs: Mapping[str, Any], item: Mapping[str, Any],
+                           screen: Mapping[str, Any], evaluate: Any, probe: Any) -> dict[str, Any]:
+    """Recover an interrupted, billed request with the tool's FREE fetch."""
+    n = item["request"]
+    operation = f"music generation {n}"
+    ledger = load_music_ledger(project_dir)
+    if not any(int(r["request"]) == n for r in ledger["requests"]):
+        ledger["requests"].append({"request": n, "operation": operation,
+                                   "output_path": item["output_path"], "status": "submitting",
+                                   "reconstructed": True})
+        _save_music_ledger(project_dir, ledger)
+    fetch_inputs = {**dict(inputs), "operation": "fetch", "task_id": item["task_id"],
+                    "output_path": item["output_path"]}
+    if float(tool.estimate_cost(fetch_inputs)) != 0.0:
+        return {"request": n, "success": False, "recovered": False,
+                "error": f"{tool.name} prices its recovery operation; refusing to pay for it"}
+    result = tracker.run_tool(tool, fetch_inputs, operation=f"music recovery fetch {n}")
+    if not result.success:
+        _update_request(project_dir, n, recovery_error=result.error)
+        return {"request": n, "success": False, "recovered": False, "error": result.error}
+    # The interrupted call's reservation is the charge: settle it at the
+    # estimate (the known rate) - it was billed, and it must not stay open.
+    entry = next((e for e in tracker.entries if e.get("id") == item["cost_entry_id"]), None)
+    if entry is not None and entry.get("status") == "reserved":
+        entry["details"] = "; ".join(filter(None, [
+            entry.get("details"), f"interrupted; task {item['task_id']} recovered by free fetch, "
+                                  "charge settled at the approved estimate"]))
+        tracker.reconcile(entry["id"], float(entry.get("estimated_usd", 0.0)), success=True)
+    result.data = {**(result.data or {}), "task_id": item["task_id"], "charge_status": "charged"}
+    result.cost_usd = float((entry or {}).get("actual_usd", 0.0))
+    return _record_result(project_dir=project_dir, tracker=tracker, n=n, operation=operation,
+                          result=result, screen=screen, evaluate=evaluate, probe=probe,
+                          recovered=True)

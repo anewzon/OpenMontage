@@ -254,18 +254,27 @@ reconciles each call, and persists the log at every step.
   That is a provider substitution; it needs the operator, not a workaround.
 - **A retry is a new paid call.** It goes through `run_tool` again and is
   charged against the same budget. Stay within the approved retry allowance;
-  never loop on a failing generation.
+  never loop on a failing generation. **A retry allowance never authorises
+  spending on its own:** a request beyond the approved base count needs the
+  operator's recorded authorisation first.
 - **A pricing mismatch means STOP too.** When a paid result carries
   `pricing_mismatch` — the provider charged something other than the known
   rate — the tracker refuses further calls to that tool. Report the expected
   and measured charge and wait; only the operator corrects the rate and calls
   `resolve_pricing_mismatch()`.
-- A timed-out music generation is **already paid**: recover it with the tool's
-  `operation: "fetch"` and its `task_id`, which costs nothing, instead of
-  generating again.
+- A timed-out or interrupted music generation is **already paid**: recover it
+  with the tool's `operation: "fetch"` and its `task_id`, which costs nothing,
+  instead of generating again. `suno_music` writes the `task_id` to a
+  pending-task record (`<output stem>.suno_task.json`) the moment the provider
+  returns it, so a session that dies while polling can still be recovered;
+  `generate_music_programme` does this recovery itself.
+- **A charge whose outcome is unknown is never retried blindly.** No new paid
+  request is made until the operator has checked the provider and recorded
+  the outcome (`record_music_review(..., charge_outcome=...)`).
 - Write every output with an explicit `output_path` under the project
   workspace (`assets/music/`, `assets/audio/`). Never let a tool fall back to
-  a default path.
+  a default path. **Paid files are never overwritten:** both paid audio tools
+  refuse, before anything is paid for, when the target file already exists.
 
 ### Music — candidates, not a first result
 
@@ -278,6 +287,27 @@ Director uses for music — metadata, then measured loudness, dynamic range and
 spectral balance, then the channel's prohibited-content list — and accept or
 reject each one with a recorded reason. Never pay for another generation to
 reach a candidate you already have.
+
+**Screening is bounded and evidence-based, with three outcomes** —
+`accepted`, `rejected` or `uncertain` — never a bare yes/no:
+
+- The channel's prohibited terms (from its `BRAND.md`) are passed in as
+  `screen["prohibited_terms"]` and matched as **whole words** in named fields
+  (`screen_music_candidate`). A word that merely contains a term is not a
+  match: `sing` never matches inside `phrasing`. **Never screen with a raw
+  substring or an unbounded regex.** A negated mention ("no <term>") is
+  recorded, not failed.
+- A **rejection must cite its criterion and evidence**: the matched term and
+  the field it was found in, or the measured value and the limit it failed,
+  or a stated creative observation. The code re-checks a term or measurement
+  claim; one it cannot substantiate becomes `uncertain`.
+- Metadata that contradicts itself (a compliance term such as
+  `instrumental` alongside a prohibited term), a failed probe, a missing
+  measurement, or an evaluation that disagrees with the screen is
+  `uncertain`.
+- Passing the screen is **not** acceptance: your technical and creative
+  `evaluate` callback still decides, with the screen result in front of it
+  (`candidate["screen"]`).
 
 Accept against the programme the proposal planned
 (`metadata.paid_audio_plan.music`): the target is **accepted unique seconds**,
@@ -301,18 +331,49 @@ A 360-second request returning an accepted 347 s candidate and a rejected
 count at their measured lengths. If neither is, the call still cost money;
 record both rejection reasons.
 
-**Recalculate before every further call** with `next_music_request(...)`: it
-compares the target with what has actually been accepted, checks the request
-ceiling, prices the next call with the tool, and checks the tracker's usable
-budget. When the target is met it says stop — **do not spend the unused retry
-allowance**. The planned request count and retry allowance are a ceiling,
-never a quota. Any further call still goes through `tracker.run_tool`.
+**Every paid music request is authorised from records, not from memory.**
+Run paid music only through `generate_music_programme`:
 
-`generate_music_programme(...)` runs exactly that loop — screen every
-candidate through your `evaluate` callback, count measured accepted seconds,
-stop on target, ceiling, budget, pricing mismatch or provider failure — and
-can resume from the accepted seconds and request count already recorded.
-Record the ledger it returns in `metadata.generated_audio`.
+```python
+from lib.relaxation_policy import approved_budget_tracker, generate_music_programme
+
+tracker = approved_budget_tracker(proposal_packet, project_state_dir)
+ledger = generate_music_programme(
+    project_dir=project_state_dir, proposal_packet=proposal_packet,
+    tracker=tracker, tool=registry.get("suno_music"), inputs=inputs,
+    evaluate=evaluate,                        # technical + creative, per candidate
+    screen={"prohibited_terms": [...],        # from the channel's BRAND.md
+            "fields": ["title", "tags"], "compliance_terms": ["instrumental"]},
+)
+```
+
+Before **every** paid request it rebuilds progress from the project's durable
+records — `cost_log.json`, the music ledger `work/paid_music_ledger.json`
+(written before and after each call), the files on disk with their
+pending-task records, and the asset manifest — and authorises the request
+against the **approved proposal**: the unique-music target, the approved
+request ceiling (base + retry line quantities), and music's own approved USD
+allocation, so music can never spend what the estimate set aside for SFX. The
+request length must be the approved `seconds_per_generation`. When the target
+is met it says stop — **do not spend the unused retry allowance**. The
+planned request count and retry allowance are a ceiling, never a quota.
+
+It **stops for the operator — before any further paid call** — when a
+request's candidates are all rejected, when any result is uncertain, when the
+next request would draw on the retry allowance, when a charge could not be
+verified or its outcome is unknown, and when the records disagree with each
+other. Checkpoint `assets` as `awaiting_human`, show the operator the ledger's
+evidence, and record only what they actually decide with
+`record_music_review(project_state_dir, request=n, reviewer=..., note=...,
+resolutions={...}, authorize_next_request=...)`; then run the programme again.
+
+**Never pass `requests_made` or `accepted_seconds` to make it continue.** They
+are claims the records can only confirm: a value that contradicts the records
+stops the programme. `max_requests` may lower the approved ceiling, never raise
+it. `next_music_request(...)` is arithmetic only and authorises nothing.
+
+Record the ledger it returns in `metadata.generated_audio`; every accepted
+music asset in `asset_manifest` must be an accepted candidate in that ledger.
 
 ### SFX — derived from this episode, never from a list
 
