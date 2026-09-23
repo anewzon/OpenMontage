@@ -138,6 +138,13 @@ DIVERGENCE_MIN = 0.020
 #: Per-step direction scatter above this reads as shake, not a steady move.
 JITTER_MAX = 0.55
 
+#: A window whose aligned correlation peak is below this carries too little
+#: coherent structure to measure the camera's steadiness - typically a frame
+#: that is mostly white water, which decorrelates between frames. Steadiness
+#: is judged only from windows at or above it; with fewer than two such
+#: windows it is "unverified", never "shaky".
+STEADINESS_CONFIDENCE_MIN = 0.35
+
 #: Fraction of textured pixels that must change for subject motion to count.
 SUBJECT_STILL_MAX = 0.08
 SUBJECT_MODERATE_MAX = 0.35
@@ -163,7 +170,13 @@ class CameraMotionError(RuntimeError):
 
 @dataclass
 class WindowMeasurement:
-    """One sampling window's raw numbers. Kept so a claim can be audited."""
+    """One sampling window's raw numbers. Kept so a claim can be audited.
+
+    ``dx_per_second`` / ``dy_per_second`` are the displacement of the frame
+    CONTENTS (fraction of frame per second): a camera panning right moves the
+    contents left, so dx is negative. ``divergence_per_second`` is positive
+    when the contents expand (push in).
+    """
 
     at_seconds: float
     dx_per_second: float
@@ -189,7 +202,7 @@ class ClipMotion:
     camera_speed_band: str  # still | graceful | brisk | aggressive
     camera_displacement_per_second: float
     camera_consistency: float
-    camera_steadiness: str  # steady | slightly_unsteady | shaky
+    camera_steadiness: str  # steady | slightly_unsteady | shaky | unverified
 
     # --- subject, measured independently ---
     subject_motion: str  # still | gentle | moderate | strong
@@ -201,6 +214,9 @@ class ClipMotion:
 
     windows: list[WindowMeasurement] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    #: "adequate" when at least two windows carried enough coherent structure
+    #: to judge steadiness; "weak" otherwise (steadiness is then "unverified").
+    camera_measurement_confidence: str = "adequate"
 
     @property
     def is_moving_camera(self) -> bool:
@@ -375,10 +391,25 @@ def _ncc_shift_subpixel(a, b) -> tuple[float, float, float, float]:
     return float(dy), float(dx), float(corr.max()), float(corr[0, 0])
 
 
+def _content_shift(a, b) -> tuple[int, int]:
+    """How far the frame CONTENTS moved from ``a`` to ``b``, in pixels.
+
+    The correlation below peaks at the NEGATIVE of the content displacement
+    (``corr = F(a) * conj(F(b))`` peaks where ``a`` shifted back lines up with
+    ``b``). Direction and divergence readings go through here so the sign is
+    decided once. Getting it wrong reported every pan, tilt and push
+    backwards - a pan right as a pan left, a push in as a pull out.
+    """
+    dy, dx, _, _ = _ncc_shift(a, b)
+    return -dy, -dx
+
+
 def _ncc_shift(a, b) -> tuple[int, int, float, float]:
     """Plain normalised cross-correlation peak between two frames.
 
-    Returns ``(dy, dx, peak, zero_shift)``. Unlike phase correlation this is
+    Returns ``(dy, dx, peak, zero_shift)``, where ``(dy, dx)`` is the peak's
+    position - the NEGATIVE of the content displacement (see
+    `_content_shift`); `_measure_window`'s alignment relies on that. Unlike phase correlation this is
     not spectrally whitened, which matters here: whitening amplifies the
     river's broadband froth until it competes with the scene structure and the
     peak collapses toward zero. Measured on a real aerial clip, whitened
@@ -491,7 +522,7 @@ def _quadrant_divergence(a, b) -> float:
         "bl": (slice(half_h, PROBE_HEIGHT), slice(0, half_w)),
         "br": (slice(half_h, PROBE_HEIGHT), slice(half_w, PROBE_WIDTH)),
     }
-    shifts = {k: _ncc_shift(a[s], b[s])[:2] for k, s in quads.items()}
+    shifts = {k: _content_shift(a[s], b[s]) for k, s in quads.items()}
     spread_x = (
         (shifts["tr"][1] + shifts["br"][1]) - (shifts["tl"][1] + shifts["bl"][1])
     ) / 2.0
@@ -522,8 +553,9 @@ def _measure_window(frames, at_seconds: float) -> Optional[WindowMeasurement]:
     for i in range(len(frames) - step):
         a, b = frames[i], frames[i + step]
         dy, dx, peak, zero = _ncc_shift(a, b)
-        dys.append(dy / PROBE_HEIGHT / BASELINE_SECONDS)
-        dxs.append(dx / PROBE_WIDTH / BASELINE_SECONDS)
+        # Content displacement is the negative of the peak position.
+        dys.append(-dy / PROBE_HEIGHT / BASELINE_SECONDS)
+        dxs.append(-dx / PROBE_WIDTH / BASELINE_SECONDS)
         peaks.append(peak)
         zeros.append(zero)
         divergences.append(_quadrant_divergence(a, b) / BASELINE_SECONDS)
@@ -626,6 +658,33 @@ def _subject_band(fraction: float) -> str:
     return "strong"
 
 
+def _steadiness(windows: list[WindowMeasurement]) -> tuple[str, str]:
+    """(steadiness, confidence), judged only from windows with coherent structure.
+
+    Scatter of the per-window displacement is shake only when each window's
+    correlation was strong enough to measure displacement at all. Decorrelated
+    white water lowers the peak and scatters the estimate without the camera
+    shaking; with fewer than two confident windows the answer is
+    "unverified" - look at the frames - never "shaky".
+    """
+    import numpy as np
+
+    confident = [w for w in windows if w.aligned_correlation >= STEADINESS_CONFIDENCE_MIN]
+    magnitudes_all = [float(np.hypot(w.dx_per_second, w.dy_per_second)) for w in windows]
+    if float(np.mean(magnitudes_all)) <= STATIC_MAX:
+        return "steady", "adequate" if len(confident) >= min(2, len(windows)) else "weak"
+    if len(confident) < 2:
+        return "unverified", "weak"
+    magnitudes = [float(np.hypot(w.dx_per_second, w.dy_per_second)) for w in confident]
+    mean_magnitude = float(np.mean(magnitudes))
+    if mean_magnitude <= STATIC_MAX:
+        return "steady", "adequate"
+    scatter = float(np.std(magnitudes)) / mean_magnitude
+    if scatter < 0.30:
+        return "steady", "adequate"
+    return ("slightly_unsteady" if scatter < JITTER_MAX else "shaky"), "adequate"
+
+
 def _classify_camera(
     windows: list[WindowMeasurement],
 ) -> tuple[str, Optional[str], float, float, str]:
@@ -655,20 +714,7 @@ def _classify_camera(
     else:
         consistency = 1.0 if displacement > 0 else 0.0
 
-    # Steadiness: scatter of the per-window displacement magnitude.
-    magnitudes = [float(np.hypot(dx, dy)) for dx, dy in zip(dxs, dys)]
-    mean_magnitude = float(np.mean(magnitudes))
-    if mean_magnitude <= STATIC_MAX:
-        steadiness = "steady"
-    else:
-        scatter = float(np.std(magnitudes)) / mean_magnitude
-        steadiness = (
-            "steady"
-            if scatter < 0.30
-            else "slightly_unsteady"
-            if scatter < JITTER_MAX
-            else "shaky"
-        )
+    steadiness, _confidence = _steadiness(windows)
 
     lateral_static = displacement < STATIC_MAX
     zoom_only = abs(divergence) >= DIVERGENCE_MIN
@@ -788,6 +834,13 @@ def analyse_clip(
         )
 
     motion, direction, displacement, consistency, steadiness = _classify_camera(windows)
+    _, confidence = _steadiness(windows)
+    if steadiness == "unverified":
+        notes.append(
+            "steadiness unverified: measurement confidence is weak (fewer than two "
+            f"windows with a correlation peak >= {STEADINESS_CONFIDENCE_MIN}) - typical "
+            "of frames dominated by white water; judge steadiness from the frames"
+        )
 
     import numpy as np
 
@@ -818,6 +871,7 @@ def analyse_clip(
         loop_correlation=round(loop_corr, 4),
         windows=windows,
         notes=notes,
+        camera_measurement_confidence=confidence,
     )
 
 

@@ -71,7 +71,7 @@ well-exposed and clean, and record for each range:
 | `camera_motion` | static / drift / pan / tilt / tracking / push_in / pull_out — **measured** |
 | `camera_direction` | left / right / up / down / in / out, or null |
 | `camera_speed_band` | still / graceful / brisk / aggressive — **measured** |
-| `camera_steadiness` | steady / slightly_unsteady / shaky — **measured** |
+| `camera_steadiness` | steady / slightly_unsteady / shaky — **measured**; `unverified` when `camera_measurement_confidence` is weak (frames dominated by white water): judge it from the frames, never reject it as shaky |
 | `subject_motion` | still / gentle / moderate / strong — **measured, separately** |
 | `usable_seconds` | from inspection of this clip |
 | `season` | spring / summer / autumn / winter / indeterminate — from frames |
