@@ -216,15 +216,25 @@ Set the balance in this order:
    been 6 dB wrong. The built-stem method is the part of Test 2 worth keeping —
    keep it.
 
-3. **Solve the relationship**, with the reference layer as the anchor and the
-   supporting layers solved **as a group**:
+3. **Solve the relationship from the channel's own mix block** — the ONE
+   fenced `channel-mix` block in the channel's `BRAND.md` — with the reference
+   layer as the anchor and the supporting layers solved **as a group**:
 
    ```python
-   from lib.stem_balance import BalanceSpec, GroupSpec, solve_balance
-   plan = solve_balance(spec, measured_built_lufs, water_role="A2-water")
-   plan.gains_db          # hand these to audio_mixer
-   plan.to_metadata()     # record in metadata.mix_balance
+   from lib.stem_balance import channel_mix_from_file
+   mix = channel_mix_from_file(r"<VidQwik root>\Channels\<channel_id>\BRAND.md")
+   plan = mix.solve(measured_built_lufs)   # the channel's offsets AND bands
+   plan.gains_db                           # hand these to audio_mixer
    ```
+
+   **This is binding.** Never build a `BalanceSpec` by hand for a channel
+   production, never type offsets or bands into the edit, and never call
+   `solve_balance(..., water_role=...)` without the channel's band — it now
+   raises, because the old built-in 6–8 dB default silently pulled the water
+   back up. The block states the water treatment too (`treatment_af`): apply it
+   to the built water stem **before** measuring it. A missing, duplicated or
+   invalid block is a channel-policy defect: stop and report it; do not
+   substitute numbers.
 
    **A percentage in a brief is a creative relationship, not a gain and not a
    LUFS target.** Never apply `volume=1.0 / 0.4 / 0.2` to raw recordings —
@@ -254,8 +264,14 @@ Set the balance in this order:
 
    ```python
    v = plan.verify(remeasured_after_gain)   # per-role error + achieved offsets
-   v.achieved_group_offsets_db              # the group's real distance below music
+   mix.check(v)                             # [] only when every band holds (both edges)
+   edit_decisions["metadata"]["mix_balance"] = mix.record(plan, v)
    ```
+
+   `mix.record` stores the parsed block, its hash and its source file beside the
+   solved plan and the verification. The publish gate re-derives the offsets
+   from the channel's CURRENT block (`check_mix_record`) and blocks a mix that
+   was solved from anything else or failed a band.
 
 **Avoid heavy compression, and never duck the music under the water.**
 

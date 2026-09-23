@@ -35,8 +35,6 @@ import pytest
 from lib import camera_motion
 from lib.camera_motion import analyse_clip, movement_profile
 from lib.stem_balance import (
-    SUPPORT_BAND_DB,
-    WATER_BAND_DB,
     BalanceSpec,
     GroupSpec,
     StemBalanceError,
@@ -82,6 +80,13 @@ _FPS = 30
 _DURATION = 8
 _OUT_W, _OUT_H = 640, 360
 
+
+#: The solver-mechanics fixtures below exercise an EXAMPLE relationship (water
+#: 6-8 dB under the music, the supporting group 12-16 dB under). These are test
+#: data, not a pipeline default: the library has no default band any more, and
+#: a channel states its own bands in its BRAND.md channel-mix block.
+WATER_BAND_DB = (-8.0, -6.0)
+SUPPORT_BAND_DB = (-16.0, -12.0)
 
 @pytest.fixture(scope="module")
 def ffmpeg() -> str:
@@ -547,6 +552,7 @@ class TestBuiltStemGainsRespectTheRelativeBalance:
             spec,
             measured,
             water_role="A2-water",
+            water_band=WATER_BAND_DB,
             group_bands={"ambience": SUPPORT_BAND_DB},
         )
 
@@ -584,6 +590,7 @@ class TestBuiltStemGainsRespectTheRelativeBalance:
             spec,
             measured,
             water_role="A2-water",
+            water_band=WATER_BAND_DB,
             group_bands={"ambience": SUPPORT_BAND_DB},
         )
         remeasured = {

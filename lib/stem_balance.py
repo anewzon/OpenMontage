@@ -2,11 +2,12 @@
 
 The problem this solves
 ----------------------
-An operator describes a mix in percentages: "music 100%, flowing water about
-40%, forest and birds and wind together about 20%." Those numbers describe a
-**creative relationship**, not settings. Three ways of using them are wrong:
+An operator describes a mix as a relationship: "music is the reference, the
+flowing water sits well under it, forest and birds and wind together sit
+under that." Those figures describe a **creative relationship**, not
+settings. Three ways of using them are wrong:
 
-1. **As literal input gains.** `volume=1.0 / 0.4 / 0.2` applied to raw source
+1. **As literal input gains.** Fixed volume factors applied to raw source
    files ignores that recordings arrive at wildly different levels. Measured
    on this installation, a river bed came off the wire at -9.9 LUFS while the
    music sat at -16.0: applying 0.4 to the river leaves it *louder* than the
@@ -28,11 +29,9 @@ What this module does instead
   have been 6 dB wrong.
 
 * Treats a percentage as an **amplitude ratio**, so `offset_db = 20*log10(p)`.
-  That is the interpretation that reproduces the operator's own engineering
-  bands: 40% -> -7.96 dB, inside the stated 6-8 dB band for water; 20% ->
-  -13.98 dB, inside the stated 12-16 dB band for the supporting group. The
-  bands remain the authority; the formula is how a starting point is derived
-  without guessing, and `clamp_to_band` keeps a refinement honest.
+  The channel's stated bands remain the authority; the formula is how a
+  starting point is derived without guessing, and `clamp_to_band` keeps a
+  refinement honest.
 
 * Distributes a **group** allowance across its members by power, so the
   members' combined loudness equals the group target rather than each member
@@ -40,11 +39,24 @@ What this module does instead
 
 * Verifies the result and reports the relationship it actually achieved.
 
-The numbers (which percentages, which bands, which members) are channel taste
-and belong in that channel's BRAND.md. This module holds none of them.
+The numbers (which offsets, which bands, which members) are channel taste
+and belong in that channel's BRAND.md. This module holds none of them: a
+channel states them in ONE fenced ``channel-mix`` block, which
+`channel_mix_from_brand` parses and validates. There is no default band - a
+water role solved without its channel's band is an error, never a fallback.
 
 Usage
 -----
+    from lib.stem_balance import channel_mix_from_brand, measure_stem
+
+    mix = channel_mix_from_brand(brand_text, source="Channels/<id>/BRAND.md")
+    plan = mix.solve({"A1-music": -16.0, "A2-water": -9.9, ...})  # BUILT stems
+    plan.gains_db                      # what to hand the mixer
+    mix.check(plan.verify(remeasured)) # [] when every relationship is in band
+    edit_decisions["metadata"]["mix_balance"] = mix.record(plan, verification)
+
+Lower level, for a caller that builds its own spec:
+
     from lib.stem_balance import BalanceSpec, GroupSpec, solve_balance
 
     spec = BalanceSpec(
@@ -65,6 +77,7 @@ Usage
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
@@ -81,10 +94,6 @@ logger = logging.getLogger(__name__)
 #: A stem quieter than this is silence for practical purposes; deriving a gain
 #: from it would produce a nonsensical boost.
 SILENCE_FLOOR_LUFS = -70.0
-
-#: Guard rails from the operator's brief, in dB below the music reference.
-WATER_BAND_DB = (-8.0, -6.0)
-SUPPORT_BAND_DB = (-16.0, -12.0)
 
 #: A derived gain beyond this is a sign the stem or the spec is wrong, not
 #: something to apply quietly.
@@ -444,13 +453,16 @@ class BalanceVerification:
         return not self.failures
 
     def in_band(self, group: str, band: tuple[float, float]) -> bool:
-        """Is a group's achieved offset inside its stated engineering band?"""
+        """Is a group's achieved offset inside its stated engineering band?
+
+        Both edges count. A group quieter than its band is a defect too: on
+        this installation birds 42 dB under the music were simply inaudible.
+        """
         if group not in self.achieved_group_offsets_db:
             return False
         low, high = min(band), max(band)
-        # A group quieter than the band is a taste question, not a defect;
-        # louder than the band is the failure mode that matters.
-        return self.achieved_group_offsets_db[group] <= high + self.tolerance_lu
+        value = self.achieved_group_offsets_db[group]
+        return low - self.tolerance_lu <= value <= high + self.tolerance_lu
 
     def to_metadata(self) -> dict[str, Any]:
         return {
@@ -474,7 +486,7 @@ def solve_balance(
     measured_built_lufs: Mapping[str, float],
     *,
     water_role: Optional[str] = None,
-    water_band: tuple[float, float] = WATER_BAND_DB,
+    water_band: Optional[tuple[float, float]] = None,
     group_bands: Optional[Mapping[str, tuple[float, float]]] = None,
 ) -> BalancePlan:
     """Derive per-role targets and gains from measured built stems.
@@ -491,6 +503,14 @@ def solve_balance(
     """
     group_bands = dict(group_bands or {})
     notes: list[str] = []
+    if water_role and water_band is None:
+        # There used to be a built-in default band here. It silently restored
+        # a generic relationship the channel had long since replaced.
+        raise StemBalanceError(
+            f"water role {water_role!r} was given without its band. The band is "
+            "channel taste: read it from the channel's BRAND.md "
+            "(channel_mix_from_brand) - there is no default."
+        )
 
     roles = spec.all_roles()
     missing = [r for r in roles if r not in measured_built_lufs]
@@ -600,31 +620,287 @@ def solve_balance(
     )
 
 
-def spec_from_brand(
-    brand_text: str,
-    *,
-    reference_role: str,
-    master_target_lufs: float,
-    roles: Mapping[str, float],
-    groups: Mapping[str, GroupSpec],
-) -> BalanceSpec:
-    """Build a spec, asserting the channel file still declares the relationship.
+# --------------------------------------------------------------------------
+# The channel's own mix settings (one ``channel-mix`` block in BRAND.md)
+# --------------------------------------------------------------------------
 
-    The percentages live in BRAND.md. This exists so a caller cannot quietly
-    carry on using a relationship the channel has stopped stating — which is
-    how a "channel standard" drifts into a hard-coded default.
-    """
-    if "prominence" not in brand_text.lower() and "% of the music" not in brand_text.lower():
-        raise StemBalanceError(
-            "BRAND.md no longer states the layer prominence relationship; "
-            "re-read the channel file before mixing"
+_MIX_BLOCK = re.compile(r"^```channel-mix[ \t]*\n(.*?)^```[ \t]*$", re.S | re.M)
+_TOP_KEYS = {"reference_role", "master_target_lufs", "water", "supporting_group", "approved"}
+_WATER_KEYS = {"role", "offset_db", "band_db", "treatment_af"}
+_GROUP_KEYS = {"name", "offset_db", "band_db", "members"}
+#: Offsets are below the reference, and a mix a listener can hear sits well
+#: inside this range. Anything outside it is a typo, not taste.
+_OFFSET_LIMITS_DB = (-60.0, 0.0)
+_MASTER_LIMITS_LUFS = (-40.0, -6.0)
+
+
+class ChannelMixError(StemBalanceError):
+    """The channel's ``channel-mix`` block is missing, duplicated or invalid."""
+
+
+def _number(value: Any, where: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise ChannelMixError(f"{where} must be a number, got {value!r}")
+    return float(value)
+
+
+def _band(value: Any, offset: float, where: str) -> tuple[float, float]:
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        raise ChannelMixError(f"{where}.band_db must be [low, high]")
+    low, high = (_number(v, f"{where}.band_db") for v in value)
+    if not low < high:
+        raise ChannelMixError(f"{where}.band_db must be [low, high] with low < high, got {value}")
+    if not (_OFFSET_LIMITS_DB[0] <= low and high <= _OFFSET_LIMITS_DB[1]):
+        raise ChannelMixError(f"{where}.band_db {value} is outside {_OFFSET_LIMITS_DB} dB")
+    if not low <= offset <= high:
+        raise ChannelMixError(
+            f"{where}.offset_db {offset} is outside its own band {value}; the block "
+            "contradicts itself")
+    return low, high
+
+
+def _exact_keys(data: Any, allowed: set[str], required: set[str], where: str) -> Mapping:
+    if not isinstance(data, Mapping):
+        raise ChannelMixError(f"{where} must be a mapping")
+    unknown = set(data) - allowed
+    if unknown:
+        raise ChannelMixError(f"{where} has unknown key(s) {sorted(unknown)} - a typo would "
+                              "otherwise be ignored silently")
+    missing = required - set(data)
+    if missing:
+        raise ChannelMixError(f"{where} is missing required key(s) {sorted(missing)}")
+    return data
+
+
+@dataclass(frozen=True)
+class ChannelMix:
+    """A channel's approved layer relationship, exactly as its BRAND.md states it."""
+
+    reference_role: str
+    master_target_lufs: float
+    water_role: str
+    water_offset_db: float
+    water_band_db: tuple[float, float]
+    water_treatment_af: Optional[str]
+    group_name: Optional[str]
+    group_offset_db: Optional[float]
+    group_band_db: Optional[tuple[float, float]]
+    members: Mapping[str, float]
+    approved: Mapping[str, Any]
+    block_sha256: str
+    source: Optional[str] = None
+    source_sha256: Optional[str] = None
+
+    # ---- solving ----------------------------------------------------------
+
+    def spec(self, present_roles: Optional[Iterable[str]] = None) -> BalanceSpec:
+        """The `BalanceSpec` for the stems that actually exist.
+
+        The reference and the water role are required. A group member with no
+        stem is dropped and the remaining members share the WHOLE group
+        allowance in their stated ratio - which is how the block's weights are
+        defined, not an adjustment.
+        """
+        present = None if present_roles is None else set(present_roles)
+        for role in (self.reference_role, self.water_role):
+            if present is not None and role not in present:
+                raise ChannelMixError(f"required role {role!r} has no stem")
+        groups: dict[str, GroupSpec] = {}
+        if self.group_name:
+            members = {r: w for r, w in self.members.items() if present is None or r in present}
+            if members:
+                groups[self.group_name] = GroupSpec(
+                    prominence=10 ** (self.group_offset_db / 20.0), members=members)
+        return BalanceSpec(
+            reference_role=self.reference_role,
+            master_target_lufs=self.master_target_lufs,
+            roles={self.water_role: 10 ** (self.water_offset_db / 20.0)},
+            groups=groups,
         )
-    return BalanceSpec(
-        reference_role=reference_role,
-        master_target_lufs=master_target_lufs,
-        roles=roles,
-        groups=groups,
+
+    def solve(self, measured_built_lufs: Mapping[str, float]) -> BalancePlan:
+        """Solve from MEASURED BUILT stems, with the channel's bands enforced."""
+        spec = self.spec(measured_built_lufs)
+        plan = solve_balance(
+            spec, measured_built_lufs, water_role=self.water_role,
+            water_band=self.water_band_db,
+            group_bands={self.group_name: self.group_band_db} if spec.groups else None,
+        )
+        omitted = sorted(r for r in self.members if r not in measured_built_lufs)
+        if omitted:
+            plan.notes.append(f"no stem for {omitted}; the remaining group members share "
+                              "the whole group allowance in their stated ratio")
+        return plan
+
+    def check(self, verification: BalanceVerification) -> list[str]:
+        """Every achieved relationship outside the channel's bands (both edges)."""
+        failures = list(verification.failures)
+        water = verification.achieved_offsets_db.get(self.water_role)
+        low, high = self.water_band_db
+        tol = verification.tolerance_lu
+        if water is None:
+            failures.append(f"{self.water_role}: not re-measured")
+        elif not low - tol <= water <= high + tol:
+            failures.append(f"{self.water_role}: {water:+.2f} dB from the reference is outside "
+                            f"the channel band [{low}, {high}]")
+        if self.group_name and self.group_name in verification.achieved_group_offsets_db:
+            if not verification.in_band(self.group_name, self.group_band_db):
+                failures.append(
+                    f"group {self.group_name}: "
+                    f"{verification.achieved_group_offsets_db[self.group_name]:+.2f} dB is outside "
+                    f"the channel band {list(self.group_band_db)}")
+        return failures
+
+    # ---- recording ----------------------------------------------------------
+
+    def to_metadata(self) -> dict[str, Any]:
+        return {
+            "source": self.source, "source_sha256": self.source_sha256,
+            "block_sha256": self.block_sha256,
+            "reference_role": self.reference_role,
+            "master_target_lufs": self.master_target_lufs,
+            "water": {"role": self.water_role, "offset_db": self.water_offset_db,
+                      "band_db": list(self.water_band_db),
+                      "treatment_af": self.water_treatment_af},
+            "supporting_group": None if not self.group_name else {
+                "name": self.group_name, "offset_db": self.group_offset_db,
+                "band_db": list(self.group_band_db), "members": dict(self.members)},
+            "approved": dict(self.approved),
+        }
+
+    def record(self, plan: BalancePlan,
+               verification: Optional[BalanceVerification] = None) -> dict[str, Any]:
+        """The ``edit_decisions.metadata.mix_balance`` record for this mix."""
+        record = plan.to_metadata()
+        record["channel_mix"] = self.to_metadata()
+        if verification is not None:
+            record["verification"] = verification.to_metadata()
+            record["channel_band_failures"] = self.check(verification)
+        return record
+
+
+def channel_mix_from_brand(brand_text: str, *, source: Optional[str] = None) -> ChannelMix:
+    """Parse and validate the ONE ``channel-mix`` block in a channel's BRAND.md.
+
+    Raises `ChannelMixError` when the block is missing or duplicated, has an
+    unknown or missing key, a band that is inverted or out of range, an
+    offset outside its own band, a non-positive or duplicated member, or a
+    role used twice. Nothing is defaulted.
+    """
+    import yaml
+
+    blocks = _MIX_BLOCK.findall(brand_text)
+    if len(blocks) != 1:
+        raise ChannelMixError(
+            f"BRAND.md must contain exactly one ```channel-mix block; found {len(blocks)}")
+    block = blocks[0]
+    try:
+        data = yaml.safe_load(block)
+    except yaml.YAMLError as exc:
+        raise ChannelMixError(f"the channel-mix block is not valid YAML: {exc}") from exc
+    data = _exact_keys(data, _TOP_KEYS, {"reference_role", "master_target_lufs", "water"},
+                       "channel-mix")
+    reference = data["reference_role"]
+    if not isinstance(reference, str) or not reference.strip():
+        raise ChannelMixError("reference_role must be a role name")
+    master = _number(data["master_target_lufs"], "master_target_lufs")
+    if not _MASTER_LIMITS_LUFS[0] <= master <= _MASTER_LIMITS_LUFS[1]:
+        raise ChannelMixError(f"master_target_lufs {master} is outside {_MASTER_LIMITS_LUFS}")
+
+    water = _exact_keys(data["water"], _WATER_KEYS, {"role", "offset_db", "band_db"}, "water")
+    water_offset = _number(water["offset_db"], "water.offset_db")
+    water_band = _band(water["band_db"], water_offset, "water")
+    treatment = water.get("treatment_af")
+    if treatment is not None and (not isinstance(treatment, str) or not treatment.strip()):
+        raise ChannelMixError("water.treatment_af must be an FFmpeg filter string when given")
+
+    group_name = group_offset = group_band = None
+    members: dict[str, float] = {}
+    if data.get("supporting_group") is not None:
+        group = _exact_keys(data["supporting_group"], _GROUP_KEYS, _GROUP_KEYS,
+                            "supporting_group")
+        group_name = str(group["name"])
+        group_offset = _number(group["offset_db"], "supporting_group.offset_db")
+        group_band = _band(group["band_db"], group_offset, "supporting_group")
+        if not isinstance(group["members"], Mapping) or not group["members"]:
+            raise ChannelMixError("supporting_group.members must name at least one role")
+        for role, weight in group["members"].items():
+            weight = _number(weight, f"supporting_group.members.{role}")
+            if weight <= 0:
+                raise ChannelMixError(f"member weight for {role!r} must be positive")
+            members[str(role)] = weight
+        if group_offset > water_offset:
+            raise ChannelMixError(
+                f"the supporting group ({group_offset} dB) is set louder than the principal "
+                f"water ({water_offset} dB); the block is inconsistent")
+
+    roles = [reference, water["role"], *members]
+    duplicates = sorted({r for r in roles if roles.count(r) > 1})
+    if duplicates:
+        raise ChannelMixError(f"role(s) used more than once: {duplicates}")
+    approved = data.get("approved") or {}
+    if not isinstance(approved, Mapping):
+        raise ChannelMixError("approved must be a mapping when given")
+
+    return ChannelMix(
+        reference_role=reference, master_target_lufs=master,
+        water_role=str(water["role"]), water_offset_db=water_offset, water_band_db=water_band,
+        water_treatment_af=treatment, group_name=group_name, group_offset_db=group_offset,
+        group_band_db=group_band, members=members, approved=dict(approved),
+        block_sha256=hashlib.sha256(block.encode("utf-8")).hexdigest(),
+        source=source,
+        source_sha256=hashlib.sha256(brand_text.encode("utf-8")).hexdigest(),
     )
+
+
+def channel_mix_from_file(path: str | Path) -> ChannelMix:
+    """`channel_mix_from_brand` for a BRAND.md on disk, recording its path and hash."""
+    path = Path(path)
+    return channel_mix_from_brand(path.read_text(encoding="utf-8"), source=str(path))
+
+
+def check_mix_record(edit_decisions: Mapping[str, Any], mix: ChannelMix) -> list[str]:
+    """Blockers when an edit's recorded mix was not solved from THIS channel mix.
+
+    Requires ``edit_decisions.metadata.mix_balance`` to carry the parsed block
+    (matching hash and values), per-role offsets equal to what the block
+    yields, and a verification with no channel-band failure.
+    """
+    record = ((edit_decisions.get("metadata") or {}).get("mix_balance") or {})
+    blockers: list[str] = []
+    recorded = record.get("channel_mix")
+    if not recorded:
+        return ["edit_decisions.metadata.mix_balance.channel_mix is missing - the mix was not "
+                "solved from the channel's BRAND.md block"]
+    if recorded.get("block_sha256") != mix.block_sha256:
+        blockers.append("the recorded channel-mix block differs from the channel's current "
+                        "BRAND.md block (hash mismatch) - re-solve the mix")
+    if recorded != mix.to_metadata() and recorded.get("block_sha256") == mix.block_sha256:
+        stored = {k: v for k, v in recorded.items() if k not in ("source", "source_sha256")}
+        current = {k: v for k, v in mix.to_metadata().items() if k not in ("source", "source_sha256")}
+        if stored != current:
+            blockers.append("the recorded channel-mix values differ from the parsed block")
+    roles = record.get("roles") or {}
+    present = [r for r in roles]
+    try:
+        expected = solve_balance(
+            mix.spec(present), {r: v["built_stem_lufs"] for r, v in roles.items()},
+            water_role=mix.water_role, water_band=mix.water_band_db,
+            group_bands={mix.group_name: mix.group_band_db} if mix.group_name else None)
+        for role, plan in expected.roles.items():
+            got = roles.get(role, {}).get("offset_from_reference_db")
+            if got is None or abs(got - round(plan.offset_from_reference_db, 2)) > 0.05:
+                blockers.append(f"{role}: recorded offset {got} is not the channel's "
+                                f"{plan.offset_from_reference_db:.2f} dB")
+    except (StemBalanceError, KeyError, TypeError) as exc:
+        blockers.append(f"the recorded mix cannot be re-derived from the channel block: {exc}")
+    verification = record.get("verification")
+    if not verification:
+        blockers.append("the executed mix was not re-measured and verified")
+    elif record.get("channel_band_failures"):
+        blockers.append("the verified mix is outside the channel's bands: "
+                        + "; ".join(record["channel_band_failures"]))
+    return blockers
 
 
 def _main(argv: list[str]) -> int:

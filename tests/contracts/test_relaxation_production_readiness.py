@@ -20,6 +20,7 @@ from pathlib import Path
 import jsonschema
 import pytest
 import yaml
+from tests._paths import channel_brand
 
 ROOT = Path(__file__).resolve().parents[2]
 MANIFEST_PATH = ROOT / "pipeline_defs" / "relaxation.yaml"
@@ -28,7 +29,7 @@ ARTIFACT_SCHEMAS = ROOT / "schemas" / "artifacts"
 SKILLS = ROOT / "skills"
 RELAX = SKILLS / "pipelines" / "relaxation"
 LIB = ROOT / "lib"
-BRAND = ROOT.parent / "Channels" / "channel_0001" / "BRAND.md"
+BRAND = channel_brand("channel_0001")
 
 #: The stage graph the pipeline promises. Order is load-bearing: media is
 #: analysed before the edit is cast from it, and procurement gates before

@@ -20,11 +20,12 @@ from pathlib import Path
 
 import pytest
 import yaml
+from tests._paths import channel_brand
 
 ROOT = Path(__file__).resolve().parents[2]
 RELAX = ROOT / "skills" / "pipelines" / "relaxation"
 MANIFEST = ROOT / "pipeline_defs" / "relaxation.yaml"
-BRAND = ROOT.parent / "Channels" / "channel_0001" / "BRAND.md"
+BRAND = channel_brand("channel_0001")
 LIB = ROOT / "lib"
 
 #: Words that name THIS channel's specific identity. A generic Director that

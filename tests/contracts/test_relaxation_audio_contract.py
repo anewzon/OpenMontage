@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from tests._paths import channel_brand
 
 ROOT = Path(__file__).resolve().parents[2]
 SKILLS = ROOT / "skills"
@@ -88,7 +89,7 @@ def _true_peak_dbfs(path: Path) -> float:
 
 # ============================ 1. channel-layer rules =======================
 def _brand_path() -> Path | None:
-    p = ROOT.parent / "Channels" / "channel_0001" / "BRAND.md"
+    p = channel_brand("channel_0001")
     return p if p.is_file() else None
 
 
