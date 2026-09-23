@@ -232,19 +232,33 @@ already has. Generate only the difference.
 ### Every paid call runs through the approved budget (binding)
 
 ```python
-from lib.relaxation_policy import approved_budget_tracker
-from tools.tool_registry import registry
+from lib.relaxation_policy import (approved_budget_tracker, generate_music_programme,
+                                   generate_sfx_source)
 
 tracker = approved_budget_tracker(proposal_packet, project_state_dir)  # cap mode
-result = tracker.run_tool(registry.get("suno_music"), inputs, operation="music: <purpose>")
+ledger = generate_music_programme(project_dir=project_state_dir, tracker=tracker, ...)
+step = generate_sfx_source(project_dir=project_state_dir, tracker=tracker, source=1, ...)
 ```
 
 `project_state_dir` is the directory holding this project's checkpoints, so
-`cost_log.json` sits beside them. `run_tool` estimates, reserves, executes and
-reconciles each call, and persists the log at every step.
+`cost_log.json` sits beside them. **Those two policy functions are the only
+paid path.** Each one authorises its call against the approved proposal and
+the project's records, then runs it through the tracker, which estimates,
+reserves, executes and reconciles it and persists the log at every step.
 
 - **Never call a paid tool's `execute()` directly.** A call that bypasses the
-  tracker has no estimate, no reservation and no cap.
+  tracker has no estimate, no reservation and no cap. In a relaxation project
+  it is refused anyway: both paid audio tools check `lib.paid_call_guard` and
+  send nothing unless the approved tracker is running a call the policy
+  granted. **An ad-hoc `tracker.run_tool(...)` is refused too**, and recorded
+  in `cost_log.json` as blocked.
+- **Each paid tool has its own approved allocation** — its line items in the
+  approved estimate. Music can never spend the SFX allocation, nor SFX the
+  music allocation, even when the overall cap still has room.
+- **One session at a time.** Paid audio holds a per-project lock; a second
+  session gets `paid_audio_in_progress` and spends nothing. While the lock is
+  held, a reserved cost entry or a `submitting` ledger row is the expected
+  in-flight state (`paid_audio_in_progress(project_state_dir)`), not damage.
 - `approved_budget_tracker` refuses to exist without an approved proposal and
   `approval.approved_budget_usd`. No approval, no paid call.
 - **`BudgetExceededError` means STOP.** Checkpoint what exists, report the
@@ -396,6 +410,23 @@ matching source only where the picture genuinely changes. The Edit Director
 builds full-length stems from them with overlaps, fades and variation. The
 budget is spent on generated **source** seconds, never on final playback
 duration.
+
+**Every SFX generation is an attempt at one approved source.** Generate with
+`generate_sfx_source(..., source=<n>)`, where `n` numbers the sources in
+`metadata.paid_audio_plan.sfx.sources` from 1. It refuses — before paying —
+when:
+
+- the source is not in the approved plan, or the request's duration or loop
+  setting differs from it;
+- that source's approved count is used up and the operator has not authorised
+  a retry of it (`record_sfx_review(..., authorize_retry_source=n)`), or the
+  approved retry allowance is spent;
+- the output file already exists, or SFX's own allocation or the cap has no
+  room;
+- an earlier SFX call is unaccounted for: an interrupted call, or a failure
+  whose charge is unknown, stops SFX until the operator settles it
+  (`record_sfx_review(..., operation=..., charge_outcome=...)`). ElevenLabs
+  has no task to recover, so a lost call is never silently repeated.
 
 ### Record generated audio as canonical assets
 

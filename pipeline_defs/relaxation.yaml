@@ -264,6 +264,8 @@ stages:
       - "Music progress rebuilt from cost_log, the music ledger, files and asset_manifest - caller counts never override them"
       - "Music request ceiling and allocation come from the approved proposal; music never spends the SFX allocation"
       - "Interrupted paid tasks recovered with the free fetch; paid audio files never overwritten"
+      - "Paid audio only via generate_music_programme / generate_sfx_source; direct execute() and ad-hoc run_tool() are refused"
+      - "Each paid tool held to its own approved allocation; SFX limited to approved sources, counts and authorised retries"
       - SFX derived from BRAND.md, the actual footage and the approved concept - no fixed category list
       - Good native clip audio preferred over generating an equivalent SFX layer
       - Long environmental beds generated as short loopable sources, not minute-for-minute

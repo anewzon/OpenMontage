@@ -292,6 +292,12 @@ class ElevenLabsSFX(BaseTool):
         except ValueError as exc:
             return ToolResult(success=False, error=f"Invalid SFX request: {exc}",
                               data={"charge_status": "not_charged"})
+        from lib.paid_call_guard import PaidCallNotAuthorized, check_paid_call
+
+        try:
+            check_paid_call(self.name, inputs)
+        except PaidCallNotAuthorized as exc:
+            return ToolResult(success=False, error=str(exc), data={"charge_status": "not_charged"})
         target = self._target_path(inputs, params["output_format"])
         if target.exists() and not inputs.get("overwrite"):
             # Checked before the paid request: refusing afterwards would waste it.

@@ -1,0 +1,68 @@
+{
+  "version": "1.0",
+  "concept_options": [
+    {
+      "id": "c1",
+      "title": "Synthetic concept 1",
+      "hook": "A calm opening shot.",
+      "narrative_structure": "journey",
+      "visual_approach": "slow landscape footage",
+      "target_duration_seconds": 120,
+      "why_this_works": "Fixture only."
+    },
+    {
+      "id": "c2",
+      "title": "Synthetic concept 2",
+      "hook": "A calm opening shot.",
+      "narrative_structure": "journey",
+      "visual_approach": "slow landscape footage",
+      "target_duration_seconds": 120,
+      "why_this_works": "Fixture only."
+    },
+    {
+      "id": "c3",
+      "title": "Synthetic concept 3",
+      "hook": "A calm opening shot.",
+      "narrative_structure": "journey",
+      "visual_approach": "slow landscape footage",
+      "target_duration_seconds": 120,
+      "why_this_works": "Fixture only."
+    }
+  ],
+  "selected_concept": {
+    "concept_id": "c1",
+    "rationale": "Fixture only."
+  },
+  "production_plan": {
+    "pipeline": "relaxation",
+    "stages": [
+      {
+        "stage": "assets",
+        "approach": "Fixture only.",
+        "tools": [
+          {
+            "tool_name": "audio_mixer",
+            "role": "mix",
+            "available": true
+          }
+        ]
+      }
+    ],
+    "render_runtime": "ffmpeg"
+  },
+  "cost_estimate": {
+    "total_estimated_usd": 0.0,
+    "budget_verdict": "no_budget_set",
+    "line_items": [
+      {
+        "tool": "audio_mixer+video_compose",
+        "operation": "local mixing, render and QC",
+        "estimated_usd": 0.0
+      }
+    ]
+  },
+  "approval": {
+    "status": "approved"
+  },
+  "metadata": {}
+}

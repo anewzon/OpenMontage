@@ -254,6 +254,16 @@ def _packet(status="approved", budget: Any = 1.0, tools=PAID_AUDIO_TOOLS) -> dic
     }
 
 
+def _granted_call(tracker, tool, tmp_path, operation="gen"):
+    """Run one call the way the pipeline policy does: under a matching grant."""
+    from lib import paid_call_guard
+
+    inputs = {"output_path": str(tmp_path / f"{tool.name}.out")}
+    with paid_call_guard.grant(tool=tool.name, operation=operation,
+                               output_path=inputs["output_path"]):
+        return tracker.run_tool(tool, inputs, operation=operation)
+
+
 class TestApprovedBudget:
     @pytest.mark.parametrize("status", ["pending", "rejected"])
     def test_no_paid_generation_without_an_approved_proposal(self, tmp_path, status):
@@ -275,7 +285,7 @@ class TestApprovedBudget:
         big = FakePaidTool(price=2.0)
         big.name = "suno_music"
         with pytest.raises(BudgetExceededError):
-            tracker.run_tool(big, {})
+            _granted_call(tracker, big, tmp_path)
         assert big.calls == 0
 
     def test_only_tools_in_the_approved_estimate_may_spend(self, tmp_path):
@@ -283,7 +293,7 @@ class TestApprovedBudget:
         rogue = FakePaidTool(price=0.1)
         rogue.name = "elevenlabs_sfx"
         with pytest.raises(ApprovalRequiredError):
-            tracker.run_tool(rogue, {})
+            _granted_call(tracker, rogue, tmp_path)
 
     def test_a_resumed_log_takes_the_newly_approved_budget(self, tmp_path):
         approved_budget_tracker(_packet(budget=5.0), tmp_path)
@@ -292,7 +302,7 @@ class TestApprovedBudget:
         rogue = FakePaidTool(price=0.1)
         rogue.name = "elevenlabs_sfx"
         with pytest.raises(ApprovalRequiredError):
-            tracker.run_tool(rogue, {})
+            _granted_call(tracker, rogue, tmp_path)
 
 
 # --------------------------------------------------------------------------
@@ -740,3 +750,53 @@ class TestMeasuredProgramme:
         focus = _focus(manifest, "assets")
         assert "never the requested length" in focus
         assert "retry allowance is a ceiling, never a quota" in focus
+
+
+class TestNoPaidCallWithoutAPolicyGrant:
+    """The approved tracker spends only on a call the pipeline policy granted."""
+
+    def test_an_ad_hoc_run_tool_is_refused_and_recorded(self, tmp_path):
+        tracker = approved_budget_tracker(_packet(budget=1.0), tmp_path)
+        tool = FakePaidTool(price=0.1)
+        tool.name = "suno_music"
+        with pytest.raises(ApprovalRequiredError):
+            tracker.run_tool(tool, {"output_path": str(tmp_path / "m.mp3")}, operation="music: calm")
+        assert tool.calls == 0
+        (entry,) = tracker.entries
+        assert entry["status"] == "refunded" and "blocked before execution" in entry["details"]
+
+    def test_a_grant_for_another_call_does_not_carry_over(self, tmp_path):
+        from lib import paid_call_guard
+
+        tracker = approved_budget_tracker(_packet(budget=1.0), tmp_path)
+        tool = FakePaidTool(price=0.1)
+        tool.name = "suno_music"
+        with paid_call_guard.grant(tool="suno_music", operation="music generation 1",
+                                   output_path=tmp_path / "a.mp3"):
+            with pytest.raises(ApprovalRequiredError):
+                tracker.run_tool(tool, {"output_path": str(tmp_path / "b.mp3")},
+                                 operation="music generation 1")
+            with pytest.raises(ApprovalRequiredError):
+                tracker.run_tool(tool, {"output_path": str(tmp_path / "a.mp3")},
+                                 operation="music generation 2")
+        assert tool.calls == 0
+
+    def test_each_tool_is_held_to_its_own_allocation(self, tmp_path):
+        tracker = approved_budget_tracker(_packet(budget=1.0), tmp_path)
+        assert tracker.allocations == {"elevenlabs_sfx": 0.25, "suno_music": 0.25}
+        music = FakePaidTool(price=0.2)
+        music.name = "suno_music"
+        _granted_call(tracker, music, tmp_path, operation="music generation 1")
+        with pytest.raises(BudgetExceededError):
+            _granted_call(tracker, music, tmp_path, operation="music generation 2")
+        assert music.calls == 1 and tracker.usable_budget_usd > 0.2,             "the cap had room; music's own allocation did not"
+
+    def test_a_directly_built_tracker_still_refuses_ungranted_calls(self, tmp_path):
+        from lib.relaxation_policy import ApprovedBudgetTracker
+
+        tracker = ApprovedBudgetTracker(cost_log_path=tmp_path / "cost_log.json")
+        tool = FakePaidTool(price=0.1)
+        tool.name = "suno_music"
+        with pytest.raises(ApprovalRequiredError):
+            tracker.run_tool(tool, {"output_path": str(tmp_path / "m.mp3")})
+        assert tool.calls == 0

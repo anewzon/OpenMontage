@@ -824,5 +824,110 @@ class TestDirectorAndGate:
         focus = " ".join(stage["review_focus"]).lower()
         for phrase in ("whole-word terms", "stop paid music until the operator records a review",
                        "caller counts never override them", "never spends the sfx allocation",
-                       "recovered with the free fetch"):
+                       "recovered with the free fetch", "ad-hoc run_tool() are refused",
+                       "own approved allocation", "authorised retries"):
             assert phrase in focus
+
+    def test_the_director_teaches_only_the_policy_path(self, asset):
+        assert 'operation="music: <purpose>"' not in asset
+        assert "Those two policy functions are the only paid path." in asset
+        assert "An ad-hoc `tracker.run_tool(...)` is refused too" in asset
+        assert "Every SFX generation is an attempt at one approved source." in asset
+        assert "a lost call is never silently repeated" in asset
+
+
+# --------------------------------------------------------------------------
+# Phase 1 closure: review defects, concurrency and in-flight state
+# --------------------------------------------------------------------------
+
+
+class TestClosureDefects:
+    def test_an_estimate_that_never_reserved_is_not_a_paid_request(self, project):
+        """D1: a crash between estimate() and reserve() spent nothing."""
+        packet = proposal()
+        tracker = approved_budget_tracker(packet, project)
+        tracker.estimate("fake_music", "music generation 1", PRICE)   # never reserved
+        tool = FakeMusic([six_minutes()])
+        ledger, _ = run(project, packet, tool)
+        assert tool.calls == 1 and ledger["stop"]["reason"] == "target_met"
+        assert ledger["requests_made"] == 1
+
+    def test_a_recovery_that_keeps_failing_can_be_abandoned_by_the_operator(self, project):
+        """D2: without this, every resume retried the same failing free fetch."""
+        packet = proposal(target=600, base=2, retry=1)
+        tool = FakeMusic([six_minutes()] * 3, interrupt_on=1, fetch_fails=True)
+        with pytest.raises(KeyboardInterrupt):
+            run(project, packet, tool)
+        ledger, _ = run(project, packet, tool)
+        assert ledger["stop"]["reason"] == "recovery_failed" and tool.calls == 1
+        with pytest.raises(ValueError):
+            record_music_review(project, request=1, reviewer="operator", note="give up",
+                                abandon_recovery=True)
+        record_music_review(project, request=1, reviewer="operator",
+                            note="provider lost the task; it was billed", charge_outcome="charged",
+                            abandon_recovery=True)
+        ledger, tracker = run(project, packet, tool)
+        assert tool.calls == 2 and ledger["stop"]["reason"] == "target_met"
+        assert tracker.budget_spent_usd == pytest.approx(0.12), "the abandoned call stays charged"
+
+    def test_a_paid_call_under_any_other_label_is_counted_and_blocks(self, project):
+        """D3: spend outside the programme's labels used to escape the music count."""
+        packet = proposal()
+        tracker = approved_budget_tracker(packet, project)
+        entry = tracker.estimate("fake_music", "music: calm piano", PRICE)
+        tracker.reserve(entry)
+        tracker.reconcile(entry, PRICE)
+        tool = FakeMusic([six_minutes()])
+        ledger, _ = run(project, packet, tool)
+        assert tool.calls == 0 and ledger["stop"]["reason"] == "records_inconsistent"
+        assert ledger["stop"]["detail"][0]["issue"] == "paid_call_outside_programme"
+        state = reconcile_music_progress(project_dir=project, tool=tool,
+                                         cost_entries=tracker.entries, probe=probe)
+        assert state["spent_usd"] == pytest.approx(0.06)
+
+    def test_the_programme_refuses_a_plain_or_foreign_tracker(self, project, tmp_path):
+        from lib.relaxation_policy import BudgetNotApproved
+        from tools.cost_tracker import CostTracker
+
+        tool = FakeMusic([six_minutes()])
+        for tracker in (CostTracker(cost_log_path=project / "cost_log.json"),
+                        approved_budget_tracker(proposal(), tmp_path)):
+            with pytest.raises(BudgetNotApproved):
+                generate_music_programme(project_dir=project, proposal_packet=proposal(),
+                                         tracker=tracker, tool=tool, inputs=inputs(project),
+                                         evaluate=accept_all, screen=SCREEN, probe=probe)
+        assert tool.calls == 0
+
+    def test_a_second_session_cannot_run_paid_audio_concurrently(self, project):
+        from lib.relaxation_policy import _paid_audio_lock, paid_audio_in_progress
+
+        assert paid_audio_in_progress(project) is False
+        tool = FakeMusic([six_minutes()])
+        with _paid_audio_lock(project):
+            assert paid_audio_in_progress(project) is True
+            ledger, _ = run(project, proposal(), tool)
+        assert tool.calls == 0 and ledger["stop"]["reason"] == "paid_audio_in_progress"
+        assert paid_audio_in_progress(project) is False
+        ledger, _ = run(project, proposal(), tool)
+        assert tool.calls == 1
+
+    def test_in_flight_records_are_expected_while_the_run_holds_the_lock(self, project):
+        """Mid-call, the records look interrupted; the lock says they are not."""
+        from lib.relaxation_policy import paid_audio_in_progress
+
+        seen = {}
+
+        def during_the_call(_inputs):
+            log = json.loads((project / "cost_log.json").read_text())
+            seen["cost_status"] = log["entries"][-1]["status"]
+            seen["ledger_status"] = load_music_ledger(project)["requests"][-1]["status"]
+            seen["in_progress"] = paid_audio_in_progress(project)
+
+        run(project, proposal(), FakeMusic([six_minutes()], on_execute=during_the_call))
+        assert seen == {"cost_status": "reserved", "ledger_status": "submitting",
+                        "in_progress": True}
+        state = reconcile_music_progress(project_dir=project, tool=FakeMusic([]),
+                                         cost_entries=json.loads(
+                                             (project / "cost_log.json").read_text())["entries"],
+                                         probe=probe)
+        assert state["issues"] == [] and state["recoverable"] == []

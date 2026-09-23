@@ -7,11 +7,13 @@ call anyway; these tests never attempt one.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from lib import paid_call_guard
 from tools.audio import suno_music as suno_module
 from tools.audio.suno_music import (
     CURRENT_MODELS,
@@ -124,7 +126,23 @@ def _instrumental(tmp_path, **extra) -> dict[str, Any]:
     }
 
 
+def _authorised(tool, inputs):
+    """What ApprovedBudgetTracker.run_tool provides while a granted call runs.
+
+    These tests exercise the provider protocol itself; the policy that grants
+    a call is tested in tests/contracts/test_relaxation_paid_music_safety.py.
+    """
+    return paid_call_guard.active_call({"tool": tool.name, "operation": "test",
+                                        "output_path": inputs.get("output_path")})
+
+
 def _run(tool, inputs, fake):
+    with patch("requests.post", side_effect=fake.post), patch("requests.get", side_effect=fake.get):
+        with _authorised(tool, inputs):
+            return tool.execute(inputs)
+
+
+def _run_unauthorised(tool, inputs, fake):
     with patch("requests.post", side_effect=fake.post), patch("requests.get", side_effect=fake.get):
         return tool.execute(inputs)
 
@@ -599,3 +617,50 @@ def test_free_recovery_keeps_files_already_on_disk(priced, tool, tmp_path):
 def test_downloads_are_atomic(priced, tool, tmp_path):
     _run(tool, _instrumental(tmp_path), FakeSuno())
     assert not list((tmp_path / "music").glob("*.part"))
+
+
+# ---- direct calls are refused in governed projects (Phase 1 closure) ---------
+
+
+def test_a_direct_paid_call_outside_any_project_is_refused(priced, tool, tmp_path):
+    fake = FakeSuno()
+    result = _run_unauthorised(tool, _instrumental(tmp_path), fake)
+    assert result.success is False and "refused" in result.error
+    assert result.data["charge_status"] == "not_charged" and result.cost_usd == 0.0
+    assert fake.posts == [] and fake.gets == [], "nothing reached the provider"
+
+
+def test_authorisation_for_another_output_does_not_carry_over(priced, tool, tmp_path):
+    fake = FakeSuno()
+    other = {"output_path": str(tmp_path / "music" / "other.mp3")}
+    with patch("requests.post", side_effect=fake.post), patch("requests.get", side_effect=fake.get):
+        with _authorised(tool, other):
+            result = tool.execute(_instrumental(tmp_path))
+    assert result.success is False and fake.posts == []
+
+
+def test_free_operations_need_no_authorisation(priced, tool, tmp_path):
+    fake = FakeSuno(credits=(500,))
+    result = _run_unauthorised(tool, {"operation": "credits", "prompt": ""}, fake)
+    assert result.success is True and fake.posts == []
+    fetched = _run_unauthorised(tool, {"operation": "fetch", "task_id": "task-1", "prompt": "",
+                                       "output_path": str(tmp_path / "music" / "r.mp3")},
+                                FakeSuno(statuses=("SUCCESS",)))
+    assert fetched.success is True and fetched.cost_usd == 0.0
+
+
+def test_a_relaxation_project_is_governed_and_another_pipeline_is_not(
+        priced, tool, tmp_path, monkeypatch):
+    import lib.events as events
+
+    monkeypatch.setattr(events, "PROJECTS_DIR", tmp_path / "projects")
+    for name, pipeline in (("relax", "relaxation"), ("explain", "explainer")):
+        project = tmp_path / "projects" / name
+        project.mkdir(parents=True)
+        (project / "project.json").write_text(json.dumps({"pipeline_type": pipeline}))
+    relax = _instrumental(tmp_path, output_path=str(tmp_path / "projects/relax/assets/m.mp3"))
+    explain = _instrumental(tmp_path, output_path=str(tmp_path / "projects/explain/assets/m.mp3"))
+    blocked = FakeSuno()
+    assert _run_unauthorised(tool, relax, blocked).success is False and blocked.posts == []
+    upstream = FakeSuno()
+    assert _run_unauthorised(tool, explain, upstream).success is True, "upstream behaviour kept"

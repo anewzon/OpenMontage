@@ -35,6 +35,7 @@ result is all-rejected, uncertain or would draw on the retry allowance.
 
 from __future__ import annotations
 
+import contextlib
 import functools
 import json
 import math
@@ -46,8 +47,18 @@ from typing import Any, Mapping, Optional
 
 import yaml
 
+from tools.cost_tracker import ApprovalRequiredError, BudgetExceededError, CostTracker
+
 __all__ = [
+    "ApprovedBudgetTracker",
     "BudgetNotApproved",
+    "PaidAudioInProgress",
+    "approved_sfx_limits",
+    "generate_sfx_source",
+    "load_sfx_ledger",
+    "paid_audio_in_progress",
+    "reconcile_sfx_progress",
+    "record_sfx_review",
     "MusicLimitsUnavailable",
     "account_music_candidates",
     "approved_music_limits",
@@ -428,18 +439,80 @@ def budget_summary(plan: Mapping[str, Any], approved_budget_usd: Optional[float]
     return "\n".join(lines)
 
 
+class ApprovedBudgetTracker(CostTracker):
+    """OpenMontage's `CostTracker` for one approved production, plus two checks.
+
+    For every PAID call, in front of the ordinary estimate/reserve/execute/
+    reconcile lifecycle:
+
+    - the pipeline policy must have granted exactly this call - tool,
+      operation and output path (`lib.paid_call_guard.grant`); an ad-hoc
+      ``run_tool`` is refused
+    - the tool may not spend beyond its OWN approved allocation (the approved
+      estimate's line items for that tool), so music can never spend the SFX
+      allocation or the reverse
+
+    A refused call is recorded in ``cost_log.json`` as refunded and never
+    executes. Free calls (a recovery fetch, a credit read) pass straight
+    through. While a granted call executes, the paid tool's own guard
+    (`lib.paid_call_guard.check_paid_call`) sees it as authorised.
+    """
+
+    #: tool name -> approved USD for that tool (set by approved_budget_tracker)
+    allocations: Mapping[str, float] = {}
+    #: the project this tracker's cost_log.json belongs to
+    project_dir: Optional[Path] = None
+
+    def tool_spent_usd(self, tool_name: str) -> float:
+        """Spent plus still-reserved USD for one tool, across every operation."""
+        return round(sum(float(e.get("actual_usd", 0.0)) + float(e.get("reserved_usd", 0.0))
+                         for e in self.entries
+                         if e.get("tool") == tool_name and _live(e)), 4)
+
+    def run_tool(self, tool: Any, inputs: dict[str, Any], operation: str = "execute",
+                 details: Optional[str] = None) -> Any:
+        from lib import paid_call_guard as guard
+
+        estimated = float(tool.estimate_cost(inputs))
+        if estimated <= 0:
+            return super().run_tool(tool, inputs, operation=operation, details=details)
+        granted = guard.current_grant()
+        problem, error = None, ApprovalRequiredError
+        if not guard.grant_matches(granted, tool.name, operation, inputs):
+            problem = ("no policy grant for this exact call - paid audio runs only through "
+                       "generate_music_programme / generate_sfx_source")
+        elif tool.name in self.allocations:
+            spent, allowed = self.tool_spent_usd(tool.name), self.allocations[tool.name]
+            if spent + estimated > allowed + 1e-9:
+                problem = (f"{tool.name} would reach ${spent + estimated:.4f} of its approved "
+                           f"${allowed:.4f} allocation")
+                error = BudgetExceededError
+        if problem:
+            entry_id = self.estimate(tool.name, operation, estimated, details=details)
+            self.refund(entry_id, reason=f"blocked before execution: {problem}")
+            raise error(problem)
+        with guard.active_call(granted):
+            return super().run_tool(tool, inputs, operation=operation, details=details)
+
+
+def _live(entry: Mapping[str, Any]) -> bool:
+    """A cost entry that reserved or spent money (not a mere estimate or refund)."""
+    return entry.get("status") in ("reserved", "completed", "failed")
+
+
 def approved_budget_tracker(proposal_packet: Mapping[str, Any], project_dir: Path) -> Any:
-    """A `CostTracker` in CAP mode, bounded by the operator-approved budget.
+    """An `ApprovedBudgetTracker` in CAP mode, bounded by the operator-approved budget.
 
     - refuses to exist without an approved proposal and ``approved_budget_usd``
     - the cap is the approved budget itself (no extra holdback: the retry
       allowance is already an explicit line inside the estimate)
     - only tools priced in the approved ``cost_estimate`` may spend; any other
       paid tool raises ``ApprovalRequiredError`` - no silent substitution
+    - each paid tool is held to its own approved allocation, and spends only
+      through a policy grant (see `ApprovedBudgetTracker`)
     - persists to ``<project_dir>/cost_log.json``
     """
     from lib.config_model import BudgetMode
-    from tools.cost_tracker import CostTracker
 
     approval = proposal_packet.get("approval") or {}
     if approval.get("status") not in _APPROVED:
@@ -456,7 +529,7 @@ def approved_budget_tracker(proposal_packet: Mapping[str, Any], project_dir: Pat
     items = (proposal_packet.get("cost_estimate") or {}).get("line_items") or []
     paid_tools = sorted({i["tool"] for i in items if i.get("estimated_usd", 0) > 0})
 
-    tracker = CostTracker(
+    tracker = ApprovedBudgetTracker(
         budget_total_usd=float(budget),
         reserve_pct=0.0,
         # The operator approved the whole budget at proposal, so the cap is the
@@ -472,8 +545,79 @@ def approved_budget_tracker(proposal_packet: Mapping[str, Any], project_dir: Pat
     tracker._approved_tools = set()
     for name in paid_tools:
         tracker.approve_tool(name)
+    tracker.allocations = {
+        name: round(sum(float(i.get("estimated_usd", 0)) for i in items if i["tool"] == name), 4)
+        for name in paid_tools
+    }
+    tracker.project_dir = Path(project_dir).resolve()
     tracker._save()
     return tracker
+
+
+def _require_project_tracker(tracker: Any, project_dir: Path) -> None:
+    if not isinstance(tracker, ApprovedBudgetTracker) or \
+            tracker.project_dir != Path(project_dir).resolve():
+        raise BudgetNotApproved(
+            "paid audio needs approved_budget_tracker(proposal_packet, project_dir) for this "
+            "same project; a plain CostTracker or another project's tracker is refused")
+
+
+class PaidAudioInProgress(RuntimeError):
+    """Another session is running paid audio generation for this project."""
+
+
+_PAID_AUDIO_LOCK = Path("work") / "paid_audio.lock"
+
+
+@contextlib.contextmanager
+def _paid_audio_lock(project_dir: Path):
+    """An OS lock held for the whole paid-audio run; a crash releases it."""
+    path = Path(project_dir) / _PAID_AUDIO_LOCK
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = open(path, "a+b")
+    try:
+        handle.seek(0)
+        if os.name == "nt":
+            import msvcrt
+
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        raise PaidAudioInProgress(
+            f"paid audio is already running for {Path(project_dir).name} in another session")
+    try:
+        yield
+    finally:
+        try:
+            handle.seek(0)
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            handle.close()
+
+
+def paid_audio_in_progress(project_dir: Path) -> bool:
+    """True while a paid-audio run holds this project's lock.
+
+    While it does, a reserved cost entry, a ``submitting`` ledger row or a
+    ``submitted`` task record is the expected in-flight state of that run, not
+    a contradiction. Only once the lock is free do they mean an interruption.
+    """
+    try:
+        with _paid_audio_lock(project_dir):
+            return False
+    except PaidAudioInProgress:
+        return True
 
 
 # --------------------------------------------------------------------------
@@ -1067,8 +1211,15 @@ def reconcile_music_progress(
         output_base = Path(ledger["output_base"])
     requests = {int(r["request"]): r for r in ledger.get("requests", [])}
     costs = _music_cost_entries(cost_entries, tool.name)
+    # Every live paid call of the music tool must be a programme request.
+    outside = [{"issue": "paid_call_outside_programme", "operation": e.get("operation"),
+                "entry": e.get("id")}
+               for e in cost_entries
+               if e.get("tool") == tool.name and _live(e)
+               and float(e.get("estimated_usd", 0.0)) > 0
+               and not _MUSIC_OPERATION.match(str(e.get("operation", "")))]
     read_record = getattr(tool, "pending_task_record", None)
-    issues: list[dict[str, Any]] = []
+    issues: list[dict[str, Any]] = list(outside)
     recoverable: list[dict[str, Any]] = []
     executed: list[int] = []
     accepted_seconds = 0.0
@@ -1086,7 +1237,7 @@ def reconcile_music_progress(
 
     for n in sorted(known):
         req = requests.get(n)
-        entries = [e for e in costs.get(n, []) if e.get("status") != "refunded"]
+        entries = [e for e in costs.get(n, []) if _live(e)]
         charged = _reviews_charge(ledger, n)
         out = Path(req["output_path"]) if req and req.get("output_path") else (
             _request_path(output_base, n) if output_base is not None else None)
@@ -1136,7 +1287,7 @@ def reconcile_music_progress(
         interrupted = entry.get("status") == "reserved" or status in (None, "submitting")
         billed_unfetched = status == "failed" and (req or {}).get("charge_status") == "charged" \
             and not (req or {}).get("candidates")
-        if (interrupted or billed_unfetched) and task_id:
+        if (interrupted or billed_unfetched) and task_id and not charged.get("abandon_recovery"):
             recoverable.append({"request": n, "task_id": task_id, "output_path": str(out),
                                 "cost_entry_id": entry.get("id"),
                                 "cost_entry_status": entry.get("status"),
@@ -1174,7 +1325,7 @@ def reconcile_music_progress(
                        else "no ledger record accepts this file"})
 
     spent = sum(float(e.get("actual_usd", 0.0)) + float(e.get("reserved_usd", 0.0))
-                for n in costs for e in costs[n] if e.get("status") != "refunded")
+                for e in cost_entries if e.get("tool") == tool.name and _live(e))
     return {
         "requests_made": len(executed),
         "last_request": max(executed, default=0),
@@ -1191,7 +1342,7 @@ def reconcile_music_progress(
 def _reviews_charge(ledger: Mapping[str, Any], n: int) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for review in _reviews_for(ledger, n):
-        for key in ("charge_outcome", "task_id"):
+        for key in ("charge_outcome", "task_id", "abandon_recovery"):
             if review.get(key):
                 out[key] = review[key]
     return out
@@ -1229,6 +1380,7 @@ def record_music_review(
     authorize_next_request: bool = False,
     charge_outcome: Optional[str] = None,
     task_id: Optional[str] = None,
+    abandon_recovery: bool = False,
 ) -> dict[str, Any]:
     """Record an explicit operator decision about paid request ``request``.
 
@@ -1236,8 +1388,12 @@ def record_music_review(
     ``resolutions`` settle uncertain candidates (``{index: {"outcome":
     "accepted" | "rejected", "reason"}}``); ``authorize_next_request`` permits
     ONE further paid request after it; ``charge_outcome`` (``charged`` /
-    ``not_charged``) and ``task_id`` settle a call whose charge was unknown.
+    ``not_charged``) and ``task_id`` settle a call whose charge was unknown;
+    ``abandon_recovery`` stops retrying a free recovery that keeps failing
+    (the request stays counted and charged, with nothing accepted from it).
     """
+    if abandon_recovery and charge_outcome is None:
+        raise ValueError("abandoning a recovery must state the charge_outcome")
     for index, res in (resolutions or {}).items():
         if res.get("outcome") not in (ACCEPTED, REJECTED) or not res.get("reason"):
             raise ValueError(f"resolution for candidate {index} needs outcome accepted|rejected "
@@ -1252,6 +1408,7 @@ def record_music_review(
         "resolutions": {str(k): dict(v) for k, v in (resolutions or {}).items()},
         "authorize_next_request": bool(authorize_next_request),
         "charge_outcome": charge_outcome, "task_id": task_id,
+        "abandon_recovery": bool(abandon_recovery),
         "recorded_at": datetime.now(timezone.utc).isoformat(),
     }
     ledger.setdefault("reviews", []).append(review)
@@ -1429,13 +1586,34 @@ def generate_music_programme(
     disagree; a charge whose outcome is unknown; or a caller's
     ``requests_made`` / ``accepted_seconds`` that the records contradict.
     """
-    from tools.cost_tracker import ApprovalRequiredError, BudgetExceededError
+    from lib import paid_call_guard
 
     if probe is None:
         from tools.analysis.audio_probe import probe_duration as probe
     screen = _validate_screen(screen)
     project_dir = Path(project_dir)
+    _require_project_tracker(tracker, project_dir)
     limits = approved_music_limits(proposal_packet, tool.name)
+    try:
+        with _paid_audio_lock(project_dir):
+            return _music_programme_locked(
+                project_dir=project_dir, limits=limits, tracker=tracker, tool=tool,
+                inputs=inputs, evaluate=evaluate, screen=screen, max_requests=max_requests,
+                accepted_seconds=accepted_seconds, requests_made=requests_made, probe=probe,
+                guard=paid_call_guard)
+    except PaidAudioInProgress as exc:
+        return {"target_seconds": limits["target_seconds"], "requests_made": None,
+                "accepted_seconds": None, "spent_usd": round(tracker.budget_spent_usd, 4),
+                "limits": limits, "generations": [],
+                "stop": {"generate": False, "reason": "paid_audio_in_progress", "detail": str(exc)},
+                "ledger_path": str(project_dir / MUSIC_LEDGER)}
+
+
+def _music_programme_locked(*, project_dir: Path, limits: Mapping[str, Any], tracker: Any,
+                            tool: Any, inputs: Mapping[str, Any], evaluate: Any,
+                            screen: Mapping[str, Any], max_requests: Optional[int],
+                            accepted_seconds: Optional[float], requests_made: Optional[int],
+                            probe: Any, guard: Any) -> dict[str, Any]:
     base = Path(inputs["output_path"])
     ledger = load_music_ledger(project_dir)
     if ledger.get("output_base") and Path(ledger["output_base"]) != base:
@@ -1483,8 +1661,10 @@ def generate_music_programme(
         })
         _save_music_ledger(project_dir, ledger)
         try:
-            result = tracker.run_tool(tool, {**dict(inputs), "output_path": str(out)},
-                                      operation=operation)
+            with guard.grant(tool=tool.name, operation=operation, output_path=out,
+                             kind="music", request=n):
+                result = tracker.run_tool(tool, {**dict(inputs), "output_path": str(out)},
+                                          operation=operation)
         except (BudgetExceededError, ApprovalRequiredError) as exc:
             _update_request(project_dir, n, status="not_executed", detail=str(exc))
             stop = {**decision, "generate": False, "reason": "reservation_refused",
@@ -1627,3 +1807,281 @@ def _recover_music_request(*, project_dir: Path, tracker: Any, tool: Any,
     return _record_result(project_dir=project_dir, tracker=tracker, n=n, operation=operation,
                           result=result, screen=screen, evaluate=evaluate, probe=probe,
                           recovered=True)
+
+
+# --------------------------------------------------------------------------
+# Paid SFX: approved sources, counted attempts, retries only with approval
+# --------------------------------------------------------------------------
+#
+# The approved plan (`metadata.paid_audio_plan.sfx`) names each source and how
+# many generations it may have; the estimate adds a retry allowance. Every
+# paid SFX call is one ATTEMPT at one approved source, recorded in
+# `cost_log.json` as ``SFX source <s> attempt <k>`` and in the SFX ledger
+# (`work/paid_sfx_ledger.json`) before and after it runs. ElevenLabs returns
+# the audio in the response - there is no task to recover - so an interrupted
+# or unknown-outcome call stops further SFX until the operator settles it.
+
+SFX_LEDGER = Path("work") / "paid_sfx_ledger.json"
+_SFX_OPERATION = re.compile(r"^SFX source (\d+) attempt (\d+)$")
+
+
+def approved_sfx_limits(proposal_packet: Mapping[str, Any], tool_name: str) -> dict[str, Any]:
+    """Sources, per-source counts, retry allowance and USD allocation - from the approval."""
+    approval = proposal_packet.get("approval") or {}
+    if approval.get("status") not in _APPROVED:
+        raise BudgetNotApproved(f"proposal approval is {approval.get('status')!r}")
+    plan = ((proposal_packet.get("metadata") or {}).get("paid_audio_plan") or {}).get("sfx")
+    if not plan or plan.get("tool") != tool_name:
+        raise BudgetNotApproved(f"the approved proposal has no paid_audio_plan.sfx for {tool_name!r}")
+    items = [i for i in ((proposal_packet.get("cost_estimate") or {}).get("line_items") or [])
+             if i.get("tool") == tool_name]
+    base = sum(int(i.get("quantity", 0)) for i in items if i.get("operation") == "SFX generation")
+    retry = sum(int(i.get("quantity", 0)) for i in items if i.get("operation") == "SFX retry allowance")
+    sources = [{"source": k, "purpose": src.get("purpose"),
+                "duration_seconds": src.get("duration_seconds"),
+                "count": int(src.get("count", 1)), "loop": src.get("loop")}
+               for k, src in enumerate(plan.get("sources") or [], start=1)]
+    if not sources or sum(s["count"] for s in sources) != base \
+            or int(plan.get("generations", base)) != base \
+            or int(plan.get("retry_generations", retry)) != retry:
+        raise BudgetNotApproved(
+            f"approved SFX plan and estimate disagree ({sum(s['count'] for s in sources)} source "
+            f"generations, plan {plan.get('generations')}+{plan.get('retry_generations')}, "
+            f"estimate {base}+{retry}); the proposal contradicts itself")
+    return {"tool": tool_name, "sources": sources, "base_generations": base,
+            "retry_generations": retry, "max_generations": base + retry,
+            "allocation_usd": round(sum(float(i.get("estimated_usd", 0)) for i in items), 4)}
+
+
+def load_sfx_ledger(project_dir: Path) -> dict[str, Any]:
+    path = Path(project_dir) / SFX_LEDGER
+    if not path.exists():
+        return {"version": 1, "calls": [], "reviews": []}
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _save_sfx_ledger(project_dir: Path, ledger: Mapping[str, Any]) -> None:
+    _write_json_atomic(Path(project_dir) / SFX_LEDGER, ledger)
+
+
+def record_sfx_review(
+    project_dir: Path,
+    *,
+    reviewer: str,
+    note: str,
+    authorize_retry_source: Optional[int] = None,
+    operation: Optional[str] = None,
+    charge_outcome: Optional[str] = None,
+) -> dict[str, Any]:
+    """Record an explicit operator decision about paid SFX.
+
+    ``authorize_retry_source`` permits ONE retry of that approved source
+    (still within the approved retry allowance); ``operation`` +
+    ``charge_outcome`` (``charged`` / ``not_charged``) settle a call whose
+    charge was unknown. Record only what the operator actually decided.
+    """
+    if not reviewer or not note:
+        raise ValueError("a review records who decided and what they said")
+    if (operation is None) != (charge_outcome is None) or \
+            charge_outcome not in (None, "charged", "not_charged"):
+        raise ValueError("settle a call with both operation and charge_outcome "
+                         "('charged' or 'not_charged')")
+    if authorize_retry_source is None and operation is None:
+        raise ValueError("a review must authorise a retry or settle a call")
+    ledger = load_sfx_ledger(project_dir)
+    review = {"reviewer": reviewer, "note": note,
+              "authorize_retry_source": authorize_retry_source,
+              "operation": operation, "charge_outcome": charge_outcome,
+              "recorded_at": datetime.now(timezone.utc).isoformat()}
+    ledger.setdefault("reviews", []).append(review)
+    _save_sfx_ledger(project_dir, ledger)
+    return review
+
+
+def reconcile_sfx_progress(*, project_dir: Path, tool_name: str,
+                           cost_entries: list[Mapping[str, Any]],
+                           limits: Mapping[str, Any]) -> dict[str, Any]:
+    """Paid-SFX progress rebuilt from cost_log.json and the SFX ledger."""
+    ledger = load_sfx_ledger(project_dir)
+    calls = {c["operation"]: c for c in ledger.get("calls", [])}
+    settled = {r["operation"]: r["charge_outcome"] for r in ledger.get("reviews", [])
+               if r.get("operation")}
+    attempts: dict[int, int] = {s["source"]: 0 for s in limits["sources"]}
+    issues: list[dict[str, Any]] = []
+    for entry in cost_entries:
+        if entry.get("tool") != tool_name or not _live(entry):
+            continue
+        op = str(entry.get("operation", ""))
+        match = _SFX_OPERATION.match(op)
+        if not match or int(match.group(1)) not in attempts:
+            if float(entry.get("estimated_usd", 0.0)) > 0:
+                issues.append({"issue": "sfx_call_outside_policy", "operation": op,
+                               "entry": entry.get("id"), "actual_usd": entry.get("actual_usd")})
+            continue
+        attempts[int(match.group(1))] += 1
+        call = calls.get(op) or {}
+        if op in settled:
+            continue
+        if entry.get("status") == "reserved":
+            issues.append({"issue": "charge_outcome_unknown", "operation": op,
+                           "detail": "the call was interrupted; settle it with "
+                                     "record_sfx_review(operation=..., charge_outcome=...)"})
+        elif call.get("status") in (None, "submitting"):
+            issues.append({"issue": "sfx_call_not_in_ledger", "operation": op})
+        elif call.get("status") == "failed" and call.get("charge_status") in (None, "unknown"):
+            issues.append({"issue": "charge_outcome_unknown", "operation": op,
+                           "detail": call.get("error") or "provider failure"})
+    retries_used = {s["source"]: max(0, attempts[s["source"]] - s["count"])
+                    for s in limits["sources"]}
+    authorised: dict[int, int] = {}
+    for review in ledger.get("reviews", []):
+        if review.get("authorize_retry_source") is not None:
+            k = int(review["authorize_retry_source"])
+            authorised[k] = authorised.get(k, 0) + 1
+    spent = sum(float(e.get("actual_usd", 0.0)) + float(e.get("reserved_usd", 0.0))
+                for e in cost_entries if e.get("tool") == tool_name and _live(e))
+    return {"attempts": attempts, "retries_used": retries_used,
+            "retries_authorised": authorised, "spent_usd": round(spent, 4),
+            "issues": issues, "ledger": ledger}
+
+
+def _settle_reviewed_sfx_charges(project_dir: Path, tracker: Any, tool_name: str) -> None:
+    settled = {r["operation"]: r["charge_outcome"]
+               for r in load_sfx_ledger(project_dir).get("reviews", []) if r.get("operation")}
+    for entry in tracker.entries:
+        outcome = settled.get(entry.get("operation"))
+        if entry.get("tool") != tool_name or entry.get("status") != "reserved" or not outcome:
+            continue
+        note = f"charge outcome recorded by operator review: {outcome}"
+        entry["details"] = "; ".join(filter(None, [entry.get("details"), note]))
+        if outcome == "charged":
+            tracker.reconcile(entry["id"], float(entry.get("estimated_usd", 0.0)), success=True)
+        else:
+            tracker.refund(entry["id"], reason=note)
+
+
+def generate_sfx_source(
+    *,
+    project_dir: Path,
+    proposal_packet: Mapping[str, Any],
+    tracker: Any,
+    tool: Any,
+    inputs: Mapping[str, Any],
+    source: int,
+) -> dict[str, Any]:
+    """ONE paid attempt at approved SFX ``source`` (1-based) - or a recorded stop.
+
+    Permitted only when every earlier SFX call is accounted for, the source is
+    approved, its approved count is not used up - or the operator has
+    authorised a retry of it within the approved retry allowance - the
+    request matches the approved source's duration (and loop setting), the
+    output file does not exist yet, and SFX's own allocation and the budget cap
+    both have room. Returns ``{"generated", "reason", "checks", "result",
+    "operation"}``; ``result`` is the tool's result when a call was made.
+    """
+    project_dir = Path(project_dir)
+    _require_project_tracker(tracker, project_dir)
+    limits = approved_sfx_limits(proposal_packet, tool.name)
+    try:
+        with _paid_audio_lock(project_dir):
+            return _sfx_locked(project_dir=project_dir, limits=limits, tracker=tracker,
+                               tool=tool, inputs=inputs, source=int(source))
+    except PaidAudioInProgress as exc:
+        return {"generated": False, "reason": "paid_audio_in_progress", "detail": str(exc),
+                "checks": {}, "result": None, "operation": None}
+
+
+def _sfx_locked(*, project_dir: Path, limits: Mapping[str, Any], tracker: Any, tool: Any,
+                inputs: Mapping[str, Any], source: int) -> dict[str, Any]:
+    from lib import paid_call_guard as guard
+
+    _settle_reviewed_sfx_charges(project_dir, tracker, tool.name)
+    state = reconcile_sfx_progress(project_dir=project_dir, tool_name=tool.name,
+                                   cost_entries=tracker.entries, limits=limits)
+    spec = next((s for s in limits["sources"] if s["source"] == source), None)
+    checks: dict[str, Any] = {
+        "source": source, "approved_sources": len(limits["sources"]),
+        "attempts": state["attempts"], "retries_used": state["retries_used"],
+        "retry_generations": limits["retry_generations"],
+        "tool_allocation_usd": limits["allocation_usd"], "tool_spent_usd": state["spent_usd"],
+        "usable_budget_usd": round(tracker.usable_budget_usd, 4),
+    }
+
+    def stop(reason: str, **detail: Any) -> dict[str, Any]:
+        return {"generated": False, "reason": reason, "checks": checks, "result": None,
+                "operation": None, **detail}
+
+    if state["issues"]:
+        return stop("records_inconsistent", detail=state["issues"])
+    if spec is None:
+        return stop("source_not_approved")
+    attempt = state["attempts"][source] + 1
+    if attempt > spec["count"]:
+        if sum(state["retries_used"].values()) >= limits["retry_generations"]:
+            return stop("retry_allowance_exhausted")
+        if state["retries_authorised"].get(source, 0) <= state["retries_used"][source]:
+            return stop("retry_requires_operator_authorization",
+                        detail={"source": source, "attempt": attempt})
+    requested = inputs.get("duration_seconds")
+    if spec["duration_seconds"] is not None and (
+            requested is None or abs(float(requested) - float(spec["duration_seconds"])) > 1e-6):
+        return stop("request_differs_from_approved_source",
+                    detail={"requested": requested, "approved": spec["duration_seconds"]})
+    if spec["loop"] is not None and bool(inputs.get("loop", False)) != bool(spec["loop"]):
+        return stop("request_differs_from_approved_source",
+                    detail={"loop": inputs.get("loop"), "approved_loop": spec["loop"]})
+    out = inputs.get("output_path")
+    pcm = str(inputs.get("output_format", "")).startswith("pcm_")
+    target = (Path(out).with_suffix(".wav") if pcm else Path(out)) if out else None
+    if target is None or target.exists():
+        return stop("output_exists_or_missing", detail={"output_path": out})
+    try:
+        cost = _unit_cost(tool, inputs)
+    except PaidCostUnavailable as exc:
+        return stop("unpriced", detail=str(exc))
+    checks["next_call_usd"] = cost
+    if cost > limits["allocation_usd"] - state["spent_usd"] + 1e-9:
+        return stop("tool_allocation_exhausted")
+    if cost > tracker.usable_budget_usd + 1e-9:
+        return stop("budget_would_be_exceeded")
+
+    operation = f"SFX source {source} attempt {attempt}"
+    ledger = load_sfx_ledger(project_dir)
+    ledger["calls"].append({"operation": operation, "source": source, "attempt": attempt,
+                            "purpose": spec["purpose"], "output_path": str(out),
+                            "status": "submitting", "authorization": checks,
+                            "started_at": datetime.now(timezone.utc).isoformat()})
+    _save_sfx_ledger(project_dir, ledger)
+    fields: dict[str, Any]
+    try:
+        with guard.grant(tool=tool.name, operation=operation, output_path=out, kind="sfx",
+                         source=source):
+            result = tracker.run_tool(tool, dict(inputs), operation=operation)
+    except (BudgetExceededError, ApprovalRequiredError) as exc:
+        _update_sfx_call(project_dir, operation, status="not_executed", detail=str(exc))
+        return stop("reservation_refused", detail=str(exc))
+    except Exception as exc:
+        _update_sfx_call(project_dir, operation, status="failed", charge_status="unknown",
+                         error=f"{type(exc).__name__}: {exc}")
+        return stop("provider_exception", detail=str(exc))
+    data = result.data or {}
+    entry = _entry_for(tracker, operation)
+    fields = {"status": "completed" if result.success else "failed",
+              "charge_status": data.get("charge_status") or ("charged" if result.success else None),
+              "cost_usd": entry.get("actual_usd", result.cost_usd),
+              "cost_entry_id": entry.get("id"),
+              "output": data.get("output") or str(out)}
+    if not result.success:
+        fields["error"] = result.error
+    _update_sfx_call(project_dir, operation, **fields)
+    return {"generated": bool(result.success),
+            "reason": "generated" if result.success else "provider_failure",
+            "checks": checks, "result": result, "operation": operation}
+
+
+def _update_sfx_call(project_dir: Path, operation: str, **fields: Any) -> None:
+    ledger = load_sfx_ledger(project_dir)
+    call = next(c for c in ledger["calls"] if c["operation"] == operation)
+    call.update(fields)
+    call["updated_at"] = datetime.now(timezone.utc).isoformat()
+    _save_sfx_ledger(project_dir, ledger)

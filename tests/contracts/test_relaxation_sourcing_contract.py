@@ -80,19 +80,40 @@ def test_metadata_accepts_sourcing(schema: dict) -> None:
 # --------------------------------------------------------------------------
 
 
+#: A synthetic, schema-minimal packet checked in with the tests. It used to be
+#: read from a production project under the git-ignored ``projects/`` folder,
+#: so these tests failed in any clean checkout or worktree.
+MINIMAL_PACKET = ROOT / "tests" / "fixtures" / "relaxation" / "proposal_packet_minimal.json"
+
+
 def _minimal_packet(schema: dict, sourcing: str) -> dict:
-    """Build the smallest packet the schema accepts, carrying `sourcing`."""
-    packet = json.loads(
-        (
-            ROOT
-            / "projects"
-            / "channel_0001__video_0001"
-            / "artifacts"
-            / "proposal_packet.json"
-        ).read_text(encoding="utf-8")
-    )
+    """The smallest packet the schema accepts, carrying `sourcing`."""
+    packet = json.loads(MINIMAL_PACKET.read_text(encoding="utf-8"))
     packet.setdefault("metadata", {})["sourcing"] = sourcing
     return packet
+
+
+def test_the_fixture_is_valid_and_synthetic(schema: dict) -> None:
+    """Without `sourcing` it validates, and it carries no production data."""
+    packet = json.loads(MINIMAL_PACKET.read_text(encoding="utf-8"))
+    jsonschema.validate(instance=packet, schema=schema)
+    text = MINIMAL_PACKET.read_text(encoding="utf-8").lower()
+    for marker in ("channel_0", "river flow", "envato", "licen"):
+        assert marker not in text
+
+
+def test_no_contract_test_reads_production_projects() -> None:
+    """Tests must pass in a clean checkout: projects/ is git-ignored."""
+    import re
+
+    # A path built into a production project: "projects" then a channel_NNNN
+    # project id, whether joined with "/" in a string or with Path's "/".
+    production_path = re.compile(
+        r"""projects["']?\s*(?:\)\s*)?[/\\]\s*(?:\(\s*)?\n?\s*["']?channel_\d{4}__""")
+    offenders = [path.relative_to(ROOT).as_posix()
+                 for path in (ROOT / "tests").rglob("*.py")
+                 if production_path.search(path.read_text(encoding="utf-8", errors="replace"))]
+    assert offenders == []
 
 
 @pytest.mark.parametrize("mode", SOURCING_MODES)

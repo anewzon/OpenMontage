@@ -41,6 +41,10 @@ The calibrations also showed that V6 treats ``duration`` as a target: 10 s
 requested returned 33.5 s and 17.8 s, while 360 s returned 359.9 s twice.
 Count only the measured length of an accepted candidate, never the request.
 
+In a governed (relaxation) project a paid ``generate`` runs only inside the
+approved budget tracker and its pipeline policy (`lib.paid_call_guard`); a
+direct call is refused before anything is submitted.
+
 Paid files are never silently replaced: ``generate`` refuses, before anything
 is submitted, when ``output_path``, a candidate beside it or its pending-task
 record already exists. And the ``task_id`` is made durable the moment the
@@ -515,6 +519,13 @@ class SunoMusic(BaseTool):
         except ValueError as exc:
             return ToolResult(success=False, error=f"Invalid Suno request: {exc}",
                               data={"charge_status": "not_charged"})
+
+        from lib.paid_call_guard import PaidCallNotAuthorized, check_paid_call
+
+        try:
+            check_paid_call(self.name, inputs)
+        except PaidCallNotAuthorized as exc:
+            return ToolResult(success=False, error=str(exc), data={"charge_status": "not_charged"})
 
         existing = self._existing_outputs(output)
         if existing and not inputs.get("overwrite"):

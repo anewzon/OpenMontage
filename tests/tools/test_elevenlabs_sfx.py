@@ -12,6 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from lib import paid_call_guard
 from tools.audio import elevenlabs_sfx as sfx_module
 from tools.audio.elevenlabs_sfx import ElevenLabsSFX
 from tools.base_tool import ToolStatus
@@ -54,9 +55,16 @@ def _inputs(tmp_path, **extra) -> dict[str, Any]:
     }
 
 
+def _authorised(tool, inputs):
+    """What ApprovedBudgetTracker.run_tool provides while a granted call runs."""
+    return paid_call_guard.active_call({"tool": tool.name, "operation": "test",
+                                        "output_path": inputs.get("output_path")})
+
+
 def _run(tool, inputs, response):
     with patch("requests.post", return_value=response) as post:
-        result = tool.execute(inputs)
+        with _authorised(tool, inputs):
+            result = tool.execute(inputs)
     return result, post
 
 
@@ -226,7 +234,8 @@ def test_transport_failure_is_an_unknown_charge(keyed, tool, tmp_path):
     import requests
 
     with patch("requests.post", side_effect=requests.Timeout("slow")):
-        result = tool.execute(_inputs(tmp_path))
+        with _authorised(tool, _inputs(tmp_path)):
+            result = tool.execute(_inputs(tmp_path))
     assert result.success is False
     assert result.data["charge_status"] == "unknown"
     assert result.cost_usd == 0.04
@@ -276,3 +285,11 @@ def test_overwriting_an_sfx_file_is_an_explicit_choice(keyed, tool, tmp_path):
     (tmp_path / "sfx" / "bed_a.mp3").write_bytes(b"paid earlier")
     result, post = _run(tool, _inputs(tmp_path, overwrite=True), _resp())
     assert result.success is True and post.call_count == 1
+
+
+def test_a_direct_sfx_call_is_refused_before_anything_is_paid(keyed, tool, tmp_path):
+    with patch("requests.post", return_value=_resp()) as post:
+        result = tool.execute(_inputs(tmp_path))
+    assert result.success is False and "refused" in result.error
+    assert result.data["charge_status"] == "not_charged"
+    post.assert_not_called()
