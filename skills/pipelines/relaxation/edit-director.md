@@ -390,11 +390,28 @@ through the proposal budget — rather than looping.
 ### Generated SFX beds: loopable sources, built into stems
 
 Generated SFX arrive as short sources (`loop: true` for beds, one-shots for
-detail). Build each full-length stem from them here:
+detail). Build each full-length stem from them here. **Generated loop edges
+are quieter than their body** — measured on this installation, the first and
+last ~0.1 s sat 3–4 dB low — and a linear crossfade of uncorrelated ambience
+dips ~3 dB in the middle. So a bed is never built by butting passes together:
 
-- overlap and crossfade successive loop passes; vary the in-point so the seam
-  never falls at one fixed interval;
-- alternate between compatible sources of the same bed where the pool allows;
+```python
+from lib.ambience_loop import build_loop_bed, seam_report
+bed = build_loop_bed(source, "work/stems/<role>_<n>.wav", seconds)   # trims edges,
+report = seam_report(bed["path"], bed["seam_seconds"])               # equal-power fold
+```
+
+`build_loop_bed` trims the quiet edges, folds the source's tail into its head
+with an **equal-power** crossfade and repeats the resulting unit;
+`seam_report` measures every join and crossfade centre against the bed
+around it. **A bed whose `report["passed"]` is False is not approved** — lengthen
+the trim or the crossfade, or use another source; never ship it. Record each
+bed's `unit_seconds`, trim, crossfade and seam report in
+`edit_decisions.metadata.loop_seams`.
+
+- alternate between compatible sources of the same bed where the pool allows,
+  and vary the in-point so a seam never falls at one fixed interval for the
+  whole film;
 - change to a new matching source only where the picture changes;
 - place one-shots occasionally and irregularly, never on a grid.
 
