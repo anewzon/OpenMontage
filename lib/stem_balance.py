@@ -841,6 +841,12 @@ def channel_mix_from_brand(brand_text: str, *, source: Optional[str] = None) -> 
     approved = data.get("approved") or {}
     if not isinstance(approved, Mapping):
         raise ChannelMixError("approved must be a mapping when given")
+    # YAML reads an unquoted date as a date object; the record must stay JSON
+    # (it is written into edit_decisions and the checkpoint).
+    approved = {str(k): v.isoformat() if hasattr(v, "isoformat") else v
+                for k, v in approved.items()}
+    if any(not isinstance(v, (str, int, float, bool, type(None))) for v in approved.values()):
+        raise ChannelMixError("approved values must be plain text, numbers or dates")
 
     return ChannelMix(
         reference_role=reference, master_target_lufs=master,

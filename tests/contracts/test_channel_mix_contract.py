@@ -268,3 +268,13 @@ def test_real_stems_land_on_the_v7a_relationship(tmp_path):
     assert mix.check(verification) == []
     for role, approved in V7A_MEASURED.items():
         assert verification.achieved_offsets_db[role] == pytest.approx(approved, abs=0.3), role
+
+
+def test_the_record_is_json_safe_even_with_a_yaml_date():
+    """YAML reads `date: 2026-09-23` as a date object; the record goes into a checkpoint."""
+    import json
+
+    mix = channel_mix_from_file(V7A)
+    assert mix.approved["date"] == "2026-09-23"
+    plan = mix.solve({"A1-music": -18, "A2-water": -10, "A3-birds": -40, "A4-forest": -30})
+    json.dumps(mix.record(plan, plan.verify({r: p.target_lufs for r, p in plan.roles.items()})))
