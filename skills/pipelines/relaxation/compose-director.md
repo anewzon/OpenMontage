@@ -57,16 +57,25 @@ The additive helpers follow the same contract via `lib/ffmpeg_runtime.py`.
 
 ## Encode settings
 
-The delivery canvas and frame rate come from the **channel's `BRAND.md`** and
-the approved proposal — the figures below show the shape of the command, not a
-house resolution.
+The delivery canvas, frame rate and loudness come from the approved proposal
+(`proposal_packet.metadata.delivery_canvas`, set from the channel's `BRAND.md`).
+**Every piece of the film is encoded to one explicit delivery contract:**
 
+```python
+from lib.delivery_qc import DeliveryContract, conform_filter, delivery_filter, encode_args, probe
+contract = DeliveryContract.from_proposal(proposal_packet)
+# footage or any existing clip:        -vf conform_filter(probe(src), contract)
+# generated / RGB input (graphics):    -vf delivery_filter(contract)
+# then:                                 *encode_args(contract)   (+ -movflags +faststart)
 ```
--c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p
--r <approved fps> -s <approved canvas>
--c:a aac -b:a 320k -ar 48000 -ac 2
--movflags +faststart
-```
+
+The contract is BT.709 primaries, transfer and matrix, **limited ("tv") range**,
+`yuv420p`, square pixels (SAR 1:1), the approved canvas and fps, AAC 48 kHz
+stereo. **Never encode a piece with bare `-pix_fmt` flags:** an RGB source
+converted without an explicit matrix becomes BT.601, and FFmpeg takes colour
+tags from the frames, so untagged frames come out "unknown". The filter
+converts and stamps the frames; `encode_args` writes the same colour into the
+H.264 bitstream.
 
 **CPU `libx264` is the production path.** Do not make a production depend on
 GPU encoding. Where NVENC is available it is a draft-speed convenience only;
@@ -139,17 +148,28 @@ length is the raw sum of its holds will not line up.
 Read `edit_decisions.metadata.opening`. When `required: true`:
 
 1. **Render it** — the named composition on its declared runtime, as its own
-   short segment into `work/`.
+   short segment into `work/`, **at the delivery contract**:
+
+   ```python
+   from lib.delivery_qc import render_opening
+   render_opening(composer_dir="remotion-composer", composition="RiverFlowOpening",
+                  props=opening_props, output="work/opening.mp4", contract=contract)
+   ```
+
+   It passes the contract's canvas as the composition's `width`/`height`/`fps`
+   (the composition refuses to fall back to a default size), renders with
+   `yuv420p` / BT.709 flags, and conforms the result. video_0003's opening,
+   rendered without them, came out `yuvj420p`, full range, BT.601.
 2. **Inspect the rendered frames.** Sample them with `frame_sampler` and look:
    confirm all three text roles are present and ranked as the channel's
    `BRAND.md` asks, and that the bed is the footage `BRAND.md` asks for, taken
    from this episode's own pool.
-3. **Match the canvas — a mismatch is a blocker.** ffprobe the rendered opening
-   and the body: width, height, fps and pixel format must be identical, and
-   equal to the approved delivery canvas. An opening composition that could
-   not read its bed may fall back to a default canvas (for example 1080p under
-   a 4K body). **Never scale, pad or concatenate mismatched segments to get
-   past it** — stop and report the blocker with both probes.
+3. **Match the format — a mismatch is a blocker.**
+   `lib.delivery_qc.compare_segments(opening, body, contract)` must return `[]`:
+   width, height, fps, pixel format, colour primaries / transfer / matrix /
+   range and SAR identical, and equal to the contract. **Never scale, pad or
+   concatenate mismatched segments to get past it** — conform the piece with
+   `lib.delivery_qc.conform`, or stop and report the blocker with both probes.
 4. **Concatenate it** ahead of the body, with the same codec, resolution, fps
    and pixel format so the join is a stream copy.
 5. **Keep the approved audio continuous** across the join. The opening does
@@ -185,18 +205,26 @@ render_report.metadata.qc.brand         BRAND.md consistency, opening present
 Keep the canonical top-level fields — `version`, `outputs[]`,
 `verification_notes[]`, `warnings[]` — schema-valid and populated.
 
-## QC — technical
+## QC — technical (executed, and a blocker)
 
-Probe the finished file and record in `render_report.metadata.qc.technical`:
+Run the executable check on the finished file and record its whole report:
 
-- resolution and 30 fps, `yuv420p`, H.264
-- audio AAC, 48 000 Hz, 2 channels
-- duration within 2 s of plan
-- integrated loudness within 1 LU of target, true peak ≤ −1.5 dBTP
-- **clean full-file decode** (`ffmpeg -v error -i final.mp4 -f null -`) — any
-  output means corrupt frames
-- A/V sync at start, middle and end
-- sampled frames per movement — no black, frozen or ungraded frames
+```python
+from lib.delivery_qc import delivery_qc
+report = delivery_qc("output/final.mp4", contract,
+                     opening="work/opening.mp4", body="work/body.mp4")
+render_report["metadata"]["qc"]["technical"] = report
+```
+
+It probes and fully decodes the master: resolution, fps, pixel format, colour
+primaries / transfer / matrix / range, SAR, duration against the plan,
+**exactly one** video and one audio stream, AAC 48 kHz stereo, integrated
+loudness and true peak against the contract, black and frozen spans, a clean
+decode, audio and picture running the same length from the same start, and
+the opening/body match. **`report["passed"]` False is a blocker** — the
+publish gate re-runs this check and refuses a master that fails it. Also
+sample frames per movement and look for ungraded frames; that one is a
+judgement, not a measurement.
 
 ## QC — audio
 

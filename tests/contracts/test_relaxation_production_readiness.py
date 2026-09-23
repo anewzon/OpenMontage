@@ -860,7 +860,9 @@ class TestCanonicalWorkspace:
 class TestOpeningCanvasSafeguard:
     def test_compose_blocks_a_mismatched_opening_canvas(self, manifest, directors):
         compose = _flat(directors["compose-director"])
-        assert "Match the canvas — a mismatch is a blocker." in compose
+        # Broadened from canvas to format and colour: the executable check.
+        assert "Match the format — a mismatch is a blocker." in compose
+        assert "compare_segments(opening, body, contract)` must return `[]`" in compose
         assert "Never scale, pad or concatenate mismatched segments" in compose
         stage = next(s for s in manifest["stages"] if s["name"] == "compose")
         focus = " ".join(stage["review_focus"]).lower()

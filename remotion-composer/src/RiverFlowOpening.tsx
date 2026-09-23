@@ -31,19 +31,27 @@ export type RiverFlowOpeningProps = {
   durationSeconds?: number;
   /** 0-1. Kept light on purpose - a heavy scrim is a brand defect. */
   scrimOpacity?: number;
+  /**
+   * The delivery canvas, from the project's delivery contract
+   * (lib/delivery_qc.DeliveryContract). When given it is authoritative: the
+   * opening must match the body it is joined to, whatever size the bed is.
+   */
+  width?: number;
+  height?: number;
+  fps?: number;
 };
 
 export const calculateRiverFlowOpeningMetadata: CalculateMetadataFunction<
   RiverFlowOpeningProps
 > = async ({ props }) => {
-  const fps = 30;
+  // The delivery contract's canvas wins. Without it, the canvas comes from the
+  // episode's own bed. With neither, the render fails: silently falling back
+  // to 1080p (or to 30 fps) put an opening in front of a body it did not match.
+  const fps = props.fps ?? 30;
   const seconds = props.durationSeconds ?? 8;
-  let width = 1920;
-  let height = 1080;
-  if (props.videoSrc) {
-    // The canvas comes from the episode's own bed. A bed that cannot be read
-    // must fail the render: silently falling back to 1080p would put a 1080p
-    // opening in front of a 4K body.
+  let width = props.width;
+  let height = props.height;
+  if (props.videoSrc && (width === undefined || height === undefined)) {
     try {
       const meta = await getVideoMetadata(resolveAsset(props.videoSrc));
       width = meta.width;
@@ -53,6 +61,12 @@ export const calculateRiverFlowOpeningMetadata: CalculateMetadataFunction<
         `RiverFlowOpening could not read its bed ${props.videoSrc}: ${String(err)}`
       );
     }
+  }
+  if (!width || !height) {
+    throw new Error(
+      "RiverFlowOpening has no canvas: pass width/height/fps from the delivery " +
+        "contract, or a readable bed. It never falls back to a default size."
+    );
   }
   return { durationInFrames: Math.round(seconds * fps), fps, width, height };
 };
@@ -111,7 +125,13 @@ export const RiverFlowOpening: React.FC<RiverFlowOpeningProps> = ({
 
   return (
     <AbsoluteFill style={{ backgroundColor: "#000" }}>
-      {videoSrc ? <OffthreadVideo src={resolveAsset(videoSrc)} muted /> : null}
+      {videoSrc ? (
+        <OffthreadVideo
+          src={resolveAsset(videoSrc)}
+          muted
+          style={{ width: "100%", height: "100%", objectFit: "cover" }}
+        />
+      ) : null}
 
       {/* Light centre-weighted scrim - enough for legibility, not a dark box. */}
       <AbsoluteFill
